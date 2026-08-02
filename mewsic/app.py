@@ -1,74 +1,98 @@
-import os
 import json
-import mpv
 import locale
-from ytmusicapi import YTMusic
+import os
+import mpv
+from bindings import MEWSIC_BINDINGS
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Footer, Input, ListView, ListItem, Label
+from textual.widgets import Footer, Header, Input, Label, ListItem, ListView
+from ytmusicapi import YTMusic
+
 
 # --- Pywal Integration ---
 def load_pywal_colors():
     """Fetches colors from pywal's JSON cache. Falls back to retro green if missing."""
-    # Default Fallback Theme (The Retro Green)
     colors = {
         "bg": "#000000",
         "fg": "#33ff00",
         "border": "#33ff00",
-        "accent": "#66ff66"
+        "accent": "#66ff66",
     }
-    
     wal_file = os.path.expanduser("~/.cache/wal/colors.json")
-    
     try:
         if os.path.exists(wal_file):
-            with open(wal_file, 'r') as f:
+            with open(wal_file, "r") as f:
                 wal_data = json.load(f)
-            
-            # Map Pywal colors to our UI
             colors["bg"] = wal_data["special"]["background"]
             colors["fg"] = wal_data["special"]["foreground"]
-            # color4 is usually a vibrant primary accent in Pywal
-            colors["border"] = wal_data["colors"]["color4"] 
-            # color6 is a good secondary highlight
-            colors["accent"] = wal_data["colors"]["color6"] 
+            colors["border"] = wal_data["colors"]["color4"]
+            colors["accent"] = wal_data["colors"]["color6"]
     except Exception as e:
-        print(f"Failed to load pywal: {e}. Using fallback theme.")
-        
+        pass
     return colors
 
-# Load the colors globally so we can inject them into the CSS
+
 theme = load_pywal_colors()
 
 
 class MewsicCore:
     def __init__(self):
         self.ytmusic = YTMusic()
-        locale.setlocale(locale.LC_NUMERIC, 'C')
-        
-        # Aggressive RAM Optimization Profile
+        locale.setlocale(locale.LC_NUMERIC, "C")
+
         self.player = mpv.MPV(
             ytdl=True,
+            ytdl_format="bestaudio/best",
             video=False,
             vo="null",
             hwdec="no",
             cache="yes",
             demuxer_max_bytes=4_000_000,
             demuxer_max_back_bytes=0,
-            audio_buffer=0.1
+            audio_buffer=0.1,
         )
+
+        # Callback variable for when a track ends naturally
+        self.on_track_ended_callback = None
+
+        # Listen for the MPV 'eof-reached' property to trigger autoplay
+        @self.player.property_observer("eof-reached")
+        def on_eof(name, value):
+            if value is True and self.on_track_ended_callback:
+                self.on_track_ended_callback()
 
     def search_songs(self, query: str):
         results = self.ytmusic.search(query, filter="songs", limit=12)
         return [
             {
-                "title": track.get('title', 'Unknown'),
-                "artist": ", ".join([a['name'] for a in track.get('artists', [])]),
-                "id": track.get('videoId')
+                "title": track.get("title", "Unknown"),
+                "artist": ", ".join([a["name"] for a in track.get("artists", [])]),
+                "id": track.get("videoId"),
             }
-            for track in results if track.get('videoId')
+            for track in results
+            if track.get("videoId")
         ]
+
+    def get_recommendation(self, video_id: str, history: set):
+        """Fetches the radio queue based on the current track, ignoring history."""
+        try:
+            # Fetch a larger queue (limit=10) so we have backups if top tracks are in history
+            res = self.ytmusic.get_watch_playlist(videoId=video_id, limit=10)
+            tracks = res.get("tracks", [])
+
+            for t in tracks:
+                vid = t.get("videoId")
+                # Check if the track exists AND if it has never been played in this session
+                if vid and vid not in history:
+                    return {
+                        "title": t.get("title", "Unknown"),
+                        "artist": ", ".join([a["name"] for a in t.get("artists", [])]),
+                        "id": vid,
+                    }
+        except Exception:
+            pass
+        return None
 
     def play(self, video_id: str):
         url = f"https://www.youtube.com/watch?v={video_id}"
@@ -80,10 +104,8 @@ class MewsicCore:
 
 
 class MewsicApp(App):
-    """A pywal-integrated TUI music player."""
-    
-    # --- Dynamic Pywal CSS ---
-    # We use double brackets {{ }} because this is a Python f-string
+    """A pywal-integrated TUI music player with Auto-Play."""
+
     CSS = f"""
     Screen {{
         background: {theme['bg']};
@@ -157,11 +179,7 @@ class MewsicApp(App):
         content-align: center middle;
     }}
     """
-    
-    BINDINGS = [
-        ("space", "toggle_playback", "Play/Pause"),
-        ("q", "quit", "Quit")
-    ]
+    BINDINGS = MEWSIC_BINDINGS
 
     CASSETTE_ART = """
   _________________
@@ -178,19 +196,27 @@ class MewsicApp(App):
         self.core = MewsicCore()
         self.search_results = []
         self.current_track = None
+        self.upcoming_track = None
+
+        # Add a set to keep track of every song played in this session
+        self.play_history = set()
+
+        self.core.on_track_ended_callback = self.handle_track_ended
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        
+
         with Horizontal(id="main-container"):
             with Vertical(id="left-pane"):
                 yield Input(placeholder="> AWAITING QUERY...", id="search-box")
                 yield ListView(id="results-list")
-                
+
             with Vertical(id="right-pane"):
                 yield Label(self.CASSETTE_ART, id="ascii-art")
-                yield Label("SYSTEM IDLE\n\nAwaiting track selection.", id="now-playing-text")
-                
+                yield Label(
+                    "SYSTEM IDLE\n\nAwaiting track selection.", id="now-playing-text"
+                )
+
         yield Label("SYS_STATUS: READY", id="status-bar")
         yield Footer()
 
@@ -212,10 +238,12 @@ class MewsicApp(App):
     def update_results_ui(self) -> None:
         list_view = self.query_one("#results-list", ListView)
         list_view.clear()
-        
+
         for track in self.search_results:
-            list_view.append(ListItem(Label(f" > {track['title']} // {track['artist']}")))
-        
+            list_view.append(
+                ListItem(Label(f" > {track['title']} // {track['artist']}"))
+            )
+
         status_bar = self.query_one("#status-bar", Label)
         status_bar.update("SYS_STATUS: DATA RECEIVED. AWAITING EXECUTION.")
 
@@ -226,32 +254,90 @@ class MewsicApp(App):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         list_view = self.query_one("#results-list", ListView)
         index = list_view.index
-        
+
         if index is not None and index < len(self.search_results):
             selected_track = self.search_results[index]
-            self.current_track = selected_track
-            
-            status_bar = self.query_one("#status-bar", Label)
-            status_bar.update(f"SYS_STATUS: BUFFERING AUDIO STREAM...")
-            
+            self.execute_play(selected_track)
+
+    def execute_play(self, track: dict) -> None:
+        """Centralized method to start playing a track and fetch the next one."""
+        self.current_track = track
+        self.upcoming_track = None
+
+        # Add this track's ID to the history so it never gets recommended again
+        self.play_history.add(track["id"])
+
+        status_bar = self.query_one("#status-bar", Label)
+        status_bar.update(f"SYS_STATUS: BUFFERING AUDIO STREAM...")
+
+        dashboard = self.query_one("#now-playing-text", Label)
+        dashboard.update(
+            f"[ AUDIO STREAM ACTIVE ]\n\n{track['title']}\nby {track['artist']}\n\n[ CALCULATING NEXT TRACK... ]"
+        )
+
+        self.core.play(track["id"])
+        status_bar.update(f"SYS_STATUS: PLAYBACK INITIATED")
+
+        # Pass a copy of the history to the background worker
+        self.fetch_recommendation(track["id"], self.play_history.copy())
+
+    @work(thread=True)
+    def fetch_recommendation(self, video_id: str, history: set) -> None:
+        """Worker thread to fetch the 'Up Next' radio track."""
+        upcoming = self.core.get_recommendation(video_id, history)
+        if upcoming:
+            self.call_from_thread(self.update_upcoming_ui, video_id, upcoming)
+
+    def update_upcoming_ui(self, source_video_id: str, upcoming: dict) -> None:
+        """Updates the dashboard with the upcoming track."""
+        # Ensure we haven't already clicked another song before this finished
+        if self.current_track and self.current_track["id"] == source_video_id:
+            self.upcoming_track = upcoming
             dashboard = self.query_one("#now-playing-text", Label)
-            dashboard.update(f"[ AUDIO STREAM ACTIVE ]\n\n{selected_track['title']}\nby {selected_track['artist']}")
-            
-            self.core.play(selected_track['id'])
-            status_bar.update(f"SYS_STATUS: PLAYBACK INITIATED")
+            dashboard.update(
+                f"[ AUDIO STREAM ACTIVE ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}\n\n[ UP NEXT ]\n{upcoming['title']}"
+            )
+
+    def handle_track_ended(self) -> None:
+        """Called by MPV when a track finishes natively."""
+        if self.upcoming_track:
+            # We must use call_from_thread because mpv's callback runs in C-thread land
+            self.call_from_thread(self.execute_play, self.upcoming_track)
 
     def action_toggle_playback(self) -> None:
         is_paused = self.core.toggle_pause()
         status_bar = self.query_one("#status-bar", Label)
         dashboard = self.query_one("#now-playing-text", Label)
-        
+
         if self.current_track:
+            next_text = (
+                f"\n\n[ UP NEXT ]\n{self.upcoming_track['title']}"
+                if self.upcoming_track
+                else "\n\n[ CALCULATING NEXT TRACK... ]"
+            )
             if is_paused:
                 status_bar.update("SYS_STATUS: PLAYBACK HALTED")
-                dashboard.update(f"[ STREAM PAUSED ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}")
+                dashboard.update(
+                    f"[ STREAM PAUSED ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}{next_text}"
+                )
             else:
                 status_bar.update("SYS_STATUS: PLAYBACK RESUMED")
-                dashboard.update(f"[ AUDIO STREAM ACTIVE ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}")
+                dashboard.update(
+                    f"[ AUDIO STREAM ACTIVE ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}{next_text}"
+                )
+
+    def action_skip_track(self) -> None:
+        """Skips the current song and plays the upcoming track."""
+        if self.upcoming_track:
+            # Play the upcoming track directly through our execution pipeline
+            self.execute_play(self.upcoming_track)
+        elif self.current_track:
+            # If they press skip too fast before the next track was calculated
+            status_bar = self.query_one("#status-bar", Label)
+            status_bar.update(
+                "SYS_STATUS: STILL CALCULATING NEXT TRACK... PLEASE WAIT."
+            )
+
 
 if __name__ == "__main__":
     app = MewsicApp()
