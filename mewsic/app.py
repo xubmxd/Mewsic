@@ -1,7 +1,6 @@
 import json
 import locale
 import os
-
 import mpv
 from bindings import MEWSIC_BINDINGS
 from textual import work
@@ -102,6 +101,25 @@ class MewsicCore:
     def toggle_pause(self):
         self.player.pause = not self.player.pause
         return self.player.pause
+
+
+class TrackListView(ListView):
+    """A custom ListView that supports Vim bindings."""
+
+    # Bindings applied ONLY when this widget is focused
+    BINDINGS = [("j", "move_down", "Down"), ("k", "move_up", "Up")]
+
+    def action_move_down(self) -> None:
+        """Vim binding to move down the list."""
+        if self.index is None and len(self.children) > 0:
+            self.index = 0
+        elif self.index is not None and self.index < len(self.children) - 1:
+            self.index += 1
+
+    def action_move_up(self) -> None:
+        """Vim binding to move up the list."""
+        if self.index is not None and self.index > 0:
+            self.index -= 1
 
 
 class MewsicApp(App):
@@ -210,7 +228,8 @@ class MewsicApp(App):
         with Horizontal(id="main-container"):
             with Vertical(id="left-pane"):
                 yield Input(placeholder="> AWAITING QUERY...", id="search-box")
-                yield ListView(id="results-list")
+                # Swap this line to use our custom widget
+                yield TrackListView(id="results-list")
 
             with Vertical(id="right-pane"):
                 yield Label(self.CASSETTE_ART, id="ascii-art")
@@ -237,13 +256,17 @@ class MewsicApp(App):
             self.call_from_thread(self.show_error, str(e))
 
     def update_results_ui(self) -> None:
-        list_view = self.query_one("#results-list", ListView)
+        # Update class reference to TrackListView
+        list_view = self.query_one("#results-list", TrackListView)
         list_view.clear()
 
         for track in self.search_results:
             list_view.append(
                 ListItem(Label(f" > {track['title']} // {track['artist']}"))
             )
+
+        # Instantly lock keyboard focus to the list so J and K work immediately
+        list_view.focus()
 
         status_bar = self.query_one("#status-bar", Label)
         status_bar.update("SYS_STATUS: DATA RECEIVED. AWAITING EXECUTION.")
@@ -253,7 +276,8 @@ class MewsicApp(App):
         status_bar.update(f"SYS_ERR: {error_msg}")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        list_view = self.query_one("#results-list", ListView)
+        # Update class reference to TrackListView
+        list_view = self.query_one("#results-list", TrackListView)
         index = list_view.index
 
         if index is not None and index < len(self.search_results):
