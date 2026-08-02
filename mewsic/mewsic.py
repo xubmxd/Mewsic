@@ -5,8 +5,7 @@ import os
 import requests
 import mpv
 from PIL import Image
-from rich_pixels import Pixels
-from textual_image.widget import Image as KittyImage
+
 from bindings import MEWSIC_BINDINGS
 from textual import work
 from textual.app import App, ComposeResult
@@ -14,6 +13,9 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 from textual.message import Message
 from ytmusicapi import YTMusic
+
+# Import the stable Kitty image protocol widget
+from textual_image.widget import Image as KittyImage
 
 
 # --- Pywal Integration ---
@@ -34,7 +36,7 @@ def load_pywal_colors():
             colors["fg"] = wal_data["special"]["foreground"]
             colors["border"] = wal_data["colors"]["color4"]
             colors["accent"] = wal_data["colors"]["color6"]
-    except Exception as e:
+    except Exception:
         pass
     return colors
 
@@ -72,8 +74,8 @@ class MewsicCore:
         parsed_results = []
         for track in results:
             if track.get("videoId"):
-                thumbnails = track.get("thumbnails", [])
-                # Grab the best available thumbnail resolution
+                # Safely check for both plural and singular keys
+                thumbnails = track.get("thumbnails") or track.get("thumbnail") or []
                 thumb_url = thumbnails[-1]["url"] if thumbnails else None
                 
                 parsed_results.append({
@@ -92,14 +94,20 @@ class MewsicCore:
             for t in tracks:
                 vid = t.get("videoId")
                 if vid and vid not in history:
+                    # Safely check for both plural and singular keys here as well!
+                    thumbnails = t.get("thumbnails") or t.get("thumbnail") or []
+                    thumb_url = thumbnails[-1]["url"] if thumbnails else None
+                    
                     return {
                         "title": t.get("title", "Unknown"),
                         "artist": ", ".join([a["name"] for a in t.get("artists", [])]),
                         "id": vid,
+                        "thumbnail": thumb_url
                     }
         except Exception:
             pass
         return None
+
 
     def get_progress(self):
         try:
@@ -198,7 +206,6 @@ class MewsicApp(App):
         height: 100%;
         margin: 1;
         border: solid {theme['border']};
-        content-align: center middle;
         background: {theme['bg']};
     }}
     #volume-label {{
@@ -234,14 +241,19 @@ class MewsicApp(App):
         text-style: bold;
     }}
     #album-art {{
-        text-align: center;
+        height: 1fr;
+        align: center middle;
         content-align: center middle;
-        text-style: bold;
-        color: {theme['border']};
+    }}
+    #info-container {{
+        height: auto;
+        min-height: 8;
+        padding-top: 1;
+        border-top: dashed {theme['border']};
     }}
     #now-playing-text {{
         text-align: center;
-        margin-top: 1;
+        width: 100%;
         color: {theme['fg']};
     }}
     #progress-container {{
@@ -273,6 +285,7 @@ class MewsicApp(App):
     """
     BINDINGS = MEWSIC_BINDINGS
 
+    # Raw string prevents invalid escape sequence warnings
     CASSETTE_ART = r"""
   _________________
  | ============= |
@@ -307,21 +320,22 @@ class MewsicApp(App):
             with Vertical(id="right-pane"):
                 yield Label("VOL: 100%", id="volume-label")
                 
+                # Image viewer takes up remaining upper space
                 yield KittyImage(id="album-art")
-
-                yield Label("SYSTEM IDLE\n\nAwaiting track selection.", id="now-playing-text")
                 
-                with Horizontal(id="progress-container"):
-                    yield Label("--:--", id="time-current")
-                    yield InteractiveBar("░" * 20, id="progress-bar")
-                    yield Label("--:--", id="time-total")
+                # Info container locked to the bottom
+                with Vertical(id="info-container"):
+                    yield Label("SYSTEM IDLE\n\nAwaiting track selection.", id="now-playing-text")
+                    
+                    with Horizontal(id="progress-container"):
+                        yield Label("--:--", id="time-current")
+                        yield InteractiveBar("░" * 20, id="progress-bar")
+                        yield Label("--:--", id="time-total")
 
         yield Label("SYS_STATUS: READY", id="status-bar")
         yield Footer()
 
-    # --- New Album Art Preview Logic ---
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        """Triggers when you scroll through the list with J and K."""
         if event.item is None:
             return
             
@@ -337,31 +351,19 @@ class MewsicApp(App):
 
     @work(thread=True, exclusive=True)
     def fetch_and_display_art(self, url: str) -> None:
-        """Fetches the high-res image and passes it directly to Kitty!"""
         try:
             response = requests.get(url, timeout=3)
             if response.status_code == 200:
-                # Open the raw, high-res image data
                 image = Image.open(io.BytesIO(response.content))
-                
-                # Resize it slightly so it doesn't try to draw a 2000x2000px image 
-                # that overflows your terminal window memory. 400x400 looks incredibly crisp!
+                # Resize for crisp terminal display
                 image = image.resize((400, 400))
-                
-                # Pass the raw PIL image to the main thread
                 self.call_from_thread(self.update_album_art, image)
         except Exception:
             pass
 
     def update_album_art(self, pil_image: Image) -> None:
-        """Assigns the new high-res image directly to the Kitty Protocol widget."""
         album_widget = self.query_one("#album-art", KittyImage)
-        
-        # textual-kitty automatically re-renders when you update the image property!
-        album_widget.image = pil_image    
-    
-
-    # -----------------------------------
+        album_widget.image = pil_image 
 
     def update_progress_bar(self) -> None:
         if not self.current_track or self.core.player.pause:
@@ -417,7 +419,6 @@ class MewsicApp(App):
                 ListItem(Label(f" > {track['title']} // {track['artist']}"))
             )
 
-        # Triggers the highlight immediately for the first item
         list_view.focus()
         status_bar = self.query_one("#status-bar", Label)
         status_bar.update("SYS_STATUS: DATA RECEIVED. AWAITING EXECUTION.")
@@ -438,6 +439,11 @@ class MewsicApp(App):
         self.current_track = track
         self.upcoming_track = None
         self.play_history.add(track["id"])
+
+        # --- NEW: Force the album art to update to the playing track ---
+        if track.get("thumbnail"):
+            self.fetch_and_display_art(track["thumbnail"])
+        # ---------------------------------------------------------------
 
         status_bar = self.query_one("#status-bar", Label)
         status_bar.update(f"SYS_STATUS: BUFFERING AUDIO STREAM...")
