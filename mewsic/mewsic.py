@@ -6,7 +6,8 @@ from bindings import MEWSIC_BINDINGS
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView
+from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.message import Message
 from ytmusicapi import YTMusic
 
 
@@ -43,7 +44,7 @@ class MewsicCore:
 
         self.player = mpv.MPV(
             ytdl=True,
-            ytdl_format="bestaudio/best",  # Forces raw audio to prevent silent hangs
+            ytdl_format="bestaudio/best",
             video=False,
             vo="null",
             hwdec="no",
@@ -53,10 +54,8 @@ class MewsicCore:
             audio_buffer=0.1,
         )
 
-        # Callback variable for when a track ends naturally
         self.on_track_ended_callback = None
 
-        # Listen for the MPV 'idle-active' property to reliably trigger autoplay
         @self.player.property_observer("idle-active")
         def on_idle(name, value):
             if value is True and self.on_track_ended_callback:
@@ -75,15 +74,12 @@ class MewsicCore:
         ]
 
     def get_recommendation(self, video_id: str, history: set):
-        """Fetches the radio queue based on the current track, ignoring history."""
         try:
-            # Fetch a larger queue (limit=10) so we have backups if top tracks are in history
             res = self.ytmusic.get_watch_playlist(videoId=video_id, limit=10)
             tracks = res.get("tracks", [])
 
             for t in tracks:
                 vid = t.get("videoId")
-                # Check if the track exists AND if it has never been played in this session
                 if vid and vid not in history:
                     return {
                         "title": t.get("title", "Unknown"),
@@ -95,11 +91,25 @@ class MewsicCore:
         return None
 
     def get_progress(self):
-        """Returns the current playback time and total duration in seconds."""
         try:
             return self.player.time_pos, self.player.duration
         except Exception:
             return None, None
+            
+    def seek(self, seconds: int):
+        try:
+            self.player.seek(seconds)
+        except Exception:
+            pass
+
+    def seek_percent(self, percent: float):
+        """Jumps to an absolute percentage of the track."""
+        try:
+            if self.player.duration:
+                # Update the playhead directly
+                self.player.time_pos = self.player.duration * percent
+        except Exception:
+            pass
 
     def play(self, video_id: str):
         url = f"https://www.youtube.com/watch?v={video_id}"
@@ -111,22 +121,37 @@ class MewsicCore:
 
 
 class TrackListView(ListView):
-    """A custom ListView that supports Vim bindings."""
-
-    # Bindings applied ONLY when this widget is focused
     BINDINGS = [("j", "move_down", "Down"), ("k", "move_up", "Up")]
 
     def action_move_down(self) -> None:
-        """Vim binding to move down the list."""
         if self.index is None and len(self.children) > 0:
             self.index = 0
         elif self.index is not None and self.index < len(self.children) - 1:
             self.index += 1
 
     def action_move_up(self) -> None:
-        """Vim binding to move up the list."""
         if self.index is not None and self.index > 0:
             self.index -= 1
+
+
+class InteractiveBar(Static):
+    """A custom ASCII progress bar that listens for mouse clicks."""
+
+    class Seek(Message):
+        """Message sent when the user clicks the bar."""
+        def __init__(self, percent: float) -> None:
+            self.percent = percent
+            super().__init__()
+
+    def on_click(self, event) -> None:
+        """Calculate where the user clicked inside the widget."""
+        if self.size.width > 0:
+            # Divide the X coordinate of the click by the total width of the bar
+            percent = event.x / self.size.width
+            # Ensure we stay between 0% and 100%
+            percent = max(0.0, min(1.0, percent))
+            # Send the message up to the main app
+            self.post_message(self.Seek(percent))
 
 
 class MewsicApp(App):
@@ -196,9 +221,21 @@ class MewsicApp(App):
         margin-top: 2;
         color: {theme['fg']};
     }}
-    #progress-bar {{
-        text-align: center;
+    #progress-container {{
+        height: 1;
         margin-top: 1;
+        padding: 0 4;
+    }}
+    #time-current {{
+        color: {theme['fg']};
+        margin-right: 1;
+    }}
+    #time-total {{
+        color: {theme['fg']};
+        margin-left: 1;
+    }}
+    #progress-bar {{
+        width: 1fr;
         color: {theme['accent']};
         text-style: bold;
     }}
@@ -229,14 +266,11 @@ class MewsicApp(App):
         self.search_results = []
         self.current_track = None
         self.upcoming_track = None
-
-        # Add a set to keep track of every song played in this session
         self.play_history = set()
 
         self.core.on_track_ended_callback = self.handle_track_ended
 
     def on_mount(self) -> None:
-        """Starts a background timer to update the progress bar every 0.5 seconds."""
         self.set_interval(0.5, self.update_progress_bar)
 
     def compose(self) -> ComposeResult:
@@ -245,44 +279,55 @@ class MewsicApp(App):
         with Horizontal(id="main-container"):
             with Vertical(id="left-pane"):
                 yield Input(placeholder="> AWAITING QUERY...", id="search-box")
-                # Swap this line to use our custom widget
                 yield TrackListView(id="results-list")
 
             with Vertical(id="right-pane"):
                 yield Label(self.CASSETTE_ART, id="ascii-art")
-                yield Label(
-                    "SYSTEM IDLE\n\nAwaiting track selection.", id="now-playing-text"
-                )
-                yield Label("", id="progress-bar") # New Progress Bar Label
+                yield Label("SYSTEM IDLE\n\nAwaiting track selection.", id="now-playing-text")
+                
+                # Split the progress bar into 3 distinct parts so the middle is clickable
+                with Horizontal(id="progress-container"):
+                    yield Label("--:--", id="time-current")
+                    yield InteractiveBar("░" * 20, id="progress-bar")
+                    yield Label("--:--", id="time-total")
 
         yield Label("SYS_STATUS: READY", id="status-bar")
         yield Footer()
 
     def update_progress_bar(self) -> None:
-        """Fired by the interval timer to redraw the progress bar."""
-        # Don't update if we aren't playing anything or if paused
         if not self.current_track or self.core.player.pause:
             return
 
         time_pos, duration = self.core.get_progress()
 
         if time_pos is not None and duration is not None and duration > 0:
-            # Calculate percentage for the bar
-            percent = time_pos / duration
-            bar_length = 20
-            filled_length = int(bar_length * percent)
-            
-            # Create the block visual [██████░░░░]
-            bar = "█" * filled_length + "░" * (bar_length - filled_length)
-            
-            # Format seconds into MM:SS
             def fmt_time(seconds):
                 m, s = divmod(int(seconds), 60)
                 return f"{m:02d}:{s:02d}"
 
-            # Update UI
-            progress_text = f"{fmt_time(time_pos)} [{bar}] {fmt_time(duration)}"
-            self.query_one("#progress-bar", Label).update(progress_text)
+            # Update the side labels
+            self.query_one("#time-current", Label).update(fmt_time(time_pos))
+            self.query_one("#time-total", Label).update(fmt_time(duration))
+
+            # Update the interactive bar
+            prog_bar = self.query_one("#progress-bar", InteractiveBar)
+            percent = time_pos / duration
+            
+            # Use actual widget width to draw exactly the right number of blocks
+            bar_length = prog_bar.size.width or 20 
+            filled_length = int(bar_length * percent)
+            
+            bar_text = "█" * filled_length + "░" * (bar_length - filled_length)
+            prog_bar.update(bar_text)
+
+    def on_interactive_bar_seek(self, event: InteractiveBar.Seek) -> None:
+        """Catches the custom Seek message sent when the user clicks the progress bar."""
+        if self.current_track:
+            self.core.seek_percent(event.percent)
+            self.update_progress_bar() # Force redraw immediately
+            
+            status_bar = self.query_one("#status-bar", Label)
+            status_bar.update(f"SYS_STATUS: JUMPED TO {int(event.percent * 100)}%")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         query = event.value.strip()
@@ -300,7 +345,6 @@ class MewsicApp(App):
             self.call_from_thread(self.show_error, str(e))
 
     def update_results_ui(self) -> None:
-        # Update class reference to TrackListView
         list_view = self.query_one("#results-list", TrackListView)
         list_view.clear()
 
@@ -309,9 +353,7 @@ class MewsicApp(App):
                 ListItem(Label(f" > {track['title']} // {track['artist']}"))
             )
 
-        # Instantly lock keyboard focus to the list so J and K work immediately
         list_view.focus()
-
         status_bar = self.query_one("#status-bar", Label)
         status_bar.update("SYS_STATUS: DATA RECEIVED. AWAITING EXECUTION.")
 
@@ -320,7 +362,6 @@ class MewsicApp(App):
         status_bar.update(f"SYS_ERR: {error_msg}")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        # Update class reference to TrackListView
         list_view = self.query_one("#results-list", TrackListView)
         index = list_view.index
 
@@ -329,11 +370,8 @@ class MewsicApp(App):
             self.execute_play(selected_track)
 
     def execute_play(self, track: dict) -> None:
-        """Centralized method to start playing a track and fetch the next one."""
         self.current_track = track
         self.upcoming_track = None
-
-        # Add this track's ID to the history so it never gets recommended again
         self.play_history.add(track["id"])
 
         status_bar = self.query_one("#status-bar", Label)
@@ -344,25 +382,19 @@ class MewsicApp(App):
             f"[ AUDIO STREAM ACTIVE ]\n\n{track['title']}\nby {track['artist']}\n\n[ CALCULATING NEXT TRACK... ]"
         )
         
-        # Reset the progress bar visually while buffering
-        self.query_one("#progress-bar", Label).update("[ Buffering... ]")
+        self.query_one("#progress-bar", InteractiveBar).update("[ Buffering... ]")
 
         self.core.play(track["id"])
         status_bar.update(f"SYS_STATUS: PLAYBACK INITIATED")
-
-        # Pass a copy of the history to the background worker
         self.fetch_recommendation(track["id"], self.play_history.copy())
 
     @work(thread=True)
     def fetch_recommendation(self, video_id: str, history: set) -> None:
-        """Worker thread to fetch the 'Up Next' radio track."""
         upcoming = self.core.get_recommendation(video_id, history)
         if upcoming:
             self.call_from_thread(self.update_upcoming_ui, video_id, upcoming)
 
     def update_upcoming_ui(self, source_video_id: str, upcoming: dict) -> None:
-        """Updates the dashboard with the upcoming track."""
-        # Ensure we haven't already clicked another song before this finished
         if self.current_track and self.current_track["id"] == source_video_id:
             self.upcoming_track = upcoming
             dashboard = self.query_one("#now-playing-text", Label)
@@ -371,9 +403,7 @@ class MewsicApp(App):
             )
 
     def handle_track_ended(self) -> None:
-        """Called by MPV when a track finishes natively (or network drops)."""
         if self.upcoming_track:
-            # We must use call_from_thread because mpv's callback runs in C-thread land
             self.call_from_thread(self.execute_play, self.upcoming_track)
 
     def action_toggle_playback(self) -> None:
@@ -399,16 +429,26 @@ class MewsicApp(App):
                 )
 
     def action_skip_track(self) -> None:
-        """Skips the current song and plays the upcoming track."""
         if self.upcoming_track:
-            # Play the upcoming track directly through our execution pipeline
             self.execute_play(self.upcoming_track)
         elif self.current_track:
-            # If they press skip too fast before the next track was calculated
             status_bar = self.query_one("#status-bar", Label)
-            status_bar.update(
-                "SYS_STATUS: STILL CALCULATING NEXT TRACK... PLEASE WAIT."
-            )
+            status_bar.update("SYS_STATUS: STILL CALCULATING NEXT TRACK... PLEASE WAIT.")
+
+    # Keeping arrow key navigation valid too!
+    def action_seek_forward(self) -> None:
+        if self.current_track:
+            self.core.seek(10)
+            self.update_progress_bar()
+            status_bar = self.query_one("#status-bar", Label)
+            status_bar.update("SYS_STATUS: SEEK +10s")
+
+    def action_seek_backward(self) -> None:
+        if self.current_track:
+            self.core.seek(-10)
+            self.update_progress_bar()
+            status_bar = self.query_one("#status-bar", Label)
+            status_bar.update("SYS_STATUS: SEEK -10s")
 
 
 if __name__ == "__main__":
