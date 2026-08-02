@@ -53,7 +53,9 @@ class MewsicCore:
             demuxer_max_back_bytes=0,
             audio_buffer=0.1,
         )
-
+        
+        # Set default volume explicitly
+        self.player.volume = 100
         self.on_track_ended_callback = None
 
         @self.player.property_observer("idle-active")
@@ -103,13 +105,24 @@ class MewsicCore:
             pass
 
     def seek_percent(self, percent: float):
-        """Jumps to an absolute percentage of the track."""
         try:
             if self.player.duration:
-                # Update the playhead directly
                 self.player.time_pos = self.player.duration * percent
         except Exception:
             pass
+            
+    def change_volume(self, delta: int) -> int:
+        """Changes the volume by the delta amount and clamps between 0-100."""
+        try:
+            current_vol = self.player.volume
+            if current_vol is None:
+                current_vol = 100
+            
+            new_vol = max(0, min(100, current_vol + delta))
+            self.player.volume = new_vol
+            return int(new_vol)
+        except Exception:
+            return 100
 
     def play(self, video_id: str):
         url = f"https://www.youtube.com/watch?v={video_id}"
@@ -135,22 +148,15 @@ class TrackListView(ListView):
 
 
 class InteractiveBar(Static):
-    """A custom ASCII progress bar that listens for mouse clicks."""
-
     class Seek(Message):
-        """Message sent when the user clicks the bar."""
         def __init__(self, percent: float) -> None:
             self.percent = percent
             super().__init__()
 
     def on_click(self, event) -> None:
-        """Calculate where the user clicked inside the widget."""
         if self.size.width > 0:
-            # Divide the X coordinate of the click by the total width of the bar
             percent = event.x / self.size.width
-            # Ensure we stay between 0% and 100%
             percent = max(0.0, min(1.0, percent))
-            # Send the message up to the main app
             self.post_message(self.Seek(percent))
 
 
@@ -186,6 +192,14 @@ class MewsicApp(App):
         border: solid {theme['border']};
         content-align: center middle;
         background: {theme['bg']};
+    }}
+    #volume-label {{
+        width: 100%;
+        text-align: right;
+        color: {theme['accent']};
+        text-style: bold;
+        padding-right: 2;
+        margin-top: 1;
     }}
     Input {{
         border: solid {theme['border']};
@@ -282,10 +296,12 @@ class MewsicApp(App):
                 yield TrackListView(id="results-list")
 
             with Vertical(id="right-pane"):
+                # Top right volume indicator
+                yield Label("VOL: 100%", id="volume-label")
+                
                 yield Label(self.CASSETTE_ART, id="ascii-art")
                 yield Label("SYSTEM IDLE\n\nAwaiting track selection.", id="now-playing-text")
                 
-                # Split the progress bar into 3 distinct parts so the middle is clickable
                 with Horizontal(id="progress-container"):
                     yield Label("--:--", id="time-current")
                     yield InteractiveBar("░" * 20, id="progress-bar")
@@ -305,15 +321,12 @@ class MewsicApp(App):
                 m, s = divmod(int(seconds), 60)
                 return f"{m:02d}:{s:02d}"
 
-            # Update the side labels
             self.query_one("#time-current", Label).update(fmt_time(time_pos))
             self.query_one("#time-total", Label).update(fmt_time(duration))
 
-            # Update the interactive bar
             prog_bar = self.query_one("#progress-bar", InteractiveBar)
             percent = time_pos / duration
             
-            # Use actual widget width to draw exactly the right number of blocks
             bar_length = prog_bar.size.width or 20 
             filled_length = int(bar_length * percent)
             
@@ -321,11 +334,9 @@ class MewsicApp(App):
             prog_bar.update(bar_text)
 
     def on_interactive_bar_seek(self, event: InteractiveBar.Seek) -> None:
-        """Catches the custom Seek message sent when the user clicks the progress bar."""
         if self.current_track:
             self.core.seek_percent(event.percent)
-            self.update_progress_bar() # Force redraw immediately
-            
+            self.update_progress_bar() 
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update(f"SYS_STATUS: JUMPED TO {int(event.percent * 100)}%")
 
@@ -435,7 +446,6 @@ class MewsicApp(App):
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update("SYS_STATUS: STILL CALCULATING NEXT TRACK... PLEASE WAIT.")
 
-    # Keeping arrow key navigation valid too!
     def action_seek_forward(self) -> None:
         if self.current_track:
             self.core.seek(10)
@@ -449,6 +459,19 @@ class MewsicApp(App):
             self.update_progress_bar()
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update("SYS_STATUS: SEEK -10s")
+
+    # --- New Volume Actions ---
+    def action_volume_up(self) -> None:
+        new_vol = self.core.change_volume(10)
+        self.query_one("#volume-label", Label).update(f"VOL: {new_vol}%")
+        status_bar = self.query_one("#status-bar", Label)
+        status_bar.update(f"SYS_STATUS: VOLUME INCREASED ({new_vol}%)")
+
+    def action_volume_down(self) -> None:
+        new_vol = self.core.change_volume(-10)
+        self.query_one("#volume-label", Label).update(f"VOL: {new_vol}%")
+        status_bar = self.query_one("#status-bar", Label)
+        status_bar.update(f"SYS_STATUS: VOLUME DECREASED ({new_vol}%)")
 
 
 if __name__ == "__main__":
