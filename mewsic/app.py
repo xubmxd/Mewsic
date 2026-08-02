@@ -1,43 +1,73 @@
-import locale
-
+import os
+import json
 import mpv
+import locale
+from ytmusicapi import YTMusic
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView
-from ytmusicapi import YTMusic
+from textual.widgets import Header, Footer, Input, ListView, ListItem, Label
+
+# --- Pywal Integration ---
+def load_pywal_colors():
+    """Fetches colors from pywal's JSON cache. Falls back to retro green if missing."""
+    # Default Fallback Theme (The Retro Green)
+    colors = {
+        "bg": "#000000",
+        "fg": "#33ff00",
+        "border": "#33ff00",
+        "accent": "#66ff66"
+    }
+    
+    wal_file = os.path.expanduser("~/.cache/wal/colors.json")
+    
+    try:
+        if os.path.exists(wal_file):
+            with open(wal_file, 'r') as f:
+                wal_data = json.load(f)
+            
+            # Map Pywal colors to our UI
+            colors["bg"] = wal_data["special"]["background"]
+            colors["fg"] = wal_data["special"]["foreground"]
+            # color4 is usually a vibrant primary accent in Pywal
+            colors["border"] = wal_data["colors"]["color4"] 
+            # color6 is a good secondary highlight
+            colors["accent"] = wal_data["colors"]["color6"] 
+    except Exception as e:
+        print(f"Failed to load pywal: {e}. Using fallback theme.")
+        
+    return colors
+
+# Load the colors globally so we can inject them into the CSS
+theme = load_pywal_colors()
 
 
 class MewsicCore:
     def __init__(self):
         self.ytmusic = YTMusic()
-        locale.setlocale(locale.LC_NUMERIC, "C")
-
-        # --- Aggressive RAM Optimization Profile ---
+        locale.setlocale(locale.LC_NUMERIC, 'C')
+        
+        # Aggressive RAM Optimization Profile
         self.player = mpv.MPV(
             ytdl=True,
-            # 1. Kill all video processing completely
             video=False,
-            vo="null",  # Absolutely no video output driver
-            hwdec="no",  # No GPU memory contexts allocated
-            # 2. Severely restrict the stream caching
-            cache="yes",  # Keep cache on so streams don't stutter...
-            demuxer_max_bytes=4_000_000,  # ...but limit forward buffer to ~4MB (default is huge)
-            demuxer_max_back_bytes=0,  # 0MB backward buffer (we don't need to rewind)
-            # 3. Audio optimizations
-            audio_buffer=0.1,  # Tiny audio output buffer (100ms)
+            vo="null",
+            hwdec="no",
+            cache="yes",
+            demuxer_max_bytes=4_000_000,
+            demuxer_max_back_bytes=0,
+            audio_buffer=0.1
         )
 
     def search_songs(self, query: str):
         results = self.ytmusic.search(query, filter="songs", limit=12)
         return [
             {
-                "title": track.get("title", "Unknown"),
-                "artist": ", ".join([a["name"] for a in track.get("artists", [])]),
-                "id": track.get("videoId"),
+                "title": track.get('title', 'Unknown'),
+                "artist": ", ".join([a['name'] for a in track.get('artists', [])]),
+                "id": track.get('videoId')
             }
-            for track in results
-            if track.get("videoId")
+            for track in results if track.get('videoId')
         ]
 
     def play(self, video_id: str):
@@ -50,86 +80,89 @@ class MewsicCore:
 
 
 class MewsicApp(App):
-    """A retro, ad-free TUI music player."""
-
-    # --- The Retro CSS Theme ---
-    CSS = """
-    Screen {
-        background: #000000;
-        color: #33ff00;
-    }
-    Header {
-        background: #002200;
-        color: #33ff00;
+    """A pywal-integrated TUI music player."""
+    
+    # --- Dynamic Pywal CSS ---
+    # We use double brackets {{ }} because this is a Python f-string
+    CSS = f"""
+    Screen {{
+        background: {theme['bg']};
+        color: {theme['fg']};
+    }}
+    Header {{
+        background: {theme['bg']};
+        color: {theme['border']};
         text-style: bold;
-    }
-    Footer {
-        background: #002200;
-        color: #33ff00;
-    }
-    #main-container {
+    }}
+    Footer {{
+        background: {theme['bg']};
+        color: {theme['border']};
+    }}
+    #main-container {{
         height: 1fr;
-    }
-    #left-pane {
+    }}
+    #left-pane {{
         width: 60%;
         height: 100%;
         margin: 1;
-    }
-    #right-pane {
+    }}
+    #right-pane {{
         width: 40%;
         height: 100%;
         margin: 1;
-        border: solid #33ff00;
+        border: solid {theme['border']};
         content-align: center middle;
-        background: #051005;
-    }
-    Input {
-        border: solid #33ff00;
-        background: #000000;
-        color: #33ff00;
-    }
-    Input:focus {
-        border: double #66ff66;
-    }
-    ListView {
-        border: solid #33ff00;
-        background: #000000;
-        color: #33ff00;
+        background: {theme['bg']};
+    }}
+    Input {{
+        border: solid {theme['border']};
+        background: {theme['bg']};
+        color: {theme['fg']};
+    }}
+    Input:focus {{
+        border: double {theme['accent']};
+    }}
+    ListView {{
+        border: solid {theme['border']};
+        background: {theme['bg']};
+        color: {theme['fg']};
         height: 1fr;
         margin-top: 1;
-    }
-    ListItem {
-        color: #33ff00;
+    }}
+    ListItem {{
+        color: {theme['fg']};
         padding: 0 1;
-    }
-    ListItem.--highlight {
-        background: #004400;
-        color: #ffffff;
+    }}
+    ListItem.--highlight {{
+        background: {theme['border']};
+        color: {theme['bg']};
         text-style: bold;
-    }
-    #ascii-art {
+    }}
+    #ascii-art {{
         text-align: center;
         text-style: bold;
-        color: #33ff00;
-    }
-    #now-playing-text {
+        color: {theme['border']};
+    }}
+    #now-playing-text {{
         text-align: center;
         margin-top: 2;
-        color: #66ff66;
-    }
-    #status-bar {
+        color: {theme['fg']};
+    }}
+    #status-bar {{
         dock: bottom;
         height: 3;
-        border-top: solid #33ff00;
-        background: #000000;
-        color: #33ff00;
+        border-top: solid {theme['border']};
+        background: {theme['bg']};
+        color: {theme['border']};
         content-align: center middle;
-    }
+    }}
     """
+    
+    BINDINGS = [
+        ("space", "toggle_playback", "Play/Pause"),
+        ("q", "quit", "Quit")
+    ]
 
-    BINDINGS = [("space", "toggle_playback", "Play/Pause"), ("q", "quit", "Quit")]
-
-    # The ASCII Cassette Tape
     CASSETTE_ART = """
   _________________
  | ============= |
@@ -148,21 +181,16 @@ class MewsicApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-
-        # The new Two-Pane Layout
+        
         with Horizontal(id="main-container"):
-            # Left Side: Search & Results
             with Vertical(id="left-pane"):
                 yield Input(placeholder="> AWAITING QUERY...", id="search-box")
                 yield ListView(id="results-list")
-
-            # Right Side: Dashboard
+                
             with Vertical(id="right-pane"):
                 yield Label(self.CASSETTE_ART, id="ascii-art")
-                yield Label(
-                    "SYSTEM IDLE\n\nAwaiting track selection.", id="now-playing-text"
-                )
-
+                yield Label("SYSTEM IDLE\n\nAwaiting track selection.", id="now-playing-text")
+                
         yield Label("SYS_STATUS: READY", id="status-bar")
         yield Footer()
 
@@ -184,12 +212,10 @@ class MewsicApp(App):
     def update_results_ui(self) -> None:
         list_view = self.query_one("#results-list", ListView)
         list_view.clear()
-
+        
         for track in self.search_results:
-            list_view.append(
-                ListItem(Label(f" > {track['title']} // {track['artist']}"))
-            )
-
+            list_view.append(ListItem(Label(f" > {track['title']} // {track['artist']}")))
+        
         status_bar = self.query_one("#status-bar", Label)
         status_bar.update("SYS_STATUS: DATA RECEIVED. AWAITING EXECUTION.")
 
@@ -200,41 +226,32 @@ class MewsicApp(App):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         list_view = self.query_one("#results-list", ListView)
         index = list_view.index
-
+        
         if index is not None and index < len(self.search_results):
             selected_track = self.search_results[index]
             self.current_track = selected_track
-
-            # Update Status Bar
+            
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update(f"SYS_STATUS: BUFFERING AUDIO STREAM...")
-
-            # Update Dashboard (Right Pane)
+            
             dashboard = self.query_one("#now-playing-text", Label)
-            dashboard.update(
-                f"[ AUDIO STREAM ACTIVE ]\n\n{selected_track['title']}\nby {selected_track['artist']}"
-            )
-
-            self.core.play(selected_track["id"])
+            dashboard.update(f"[ AUDIO STREAM ACTIVE ]\n\n{selected_track['title']}\nby {selected_track['artist']}")
+            
+            self.core.play(selected_track['id'])
             status_bar.update(f"SYS_STATUS: PLAYBACK INITIATED")
 
     def action_toggle_playback(self) -> None:
         is_paused = self.core.toggle_pause()
         status_bar = self.query_one("#status-bar", Label)
         dashboard = self.query_one("#now-playing-text", Label)
-
+        
         if self.current_track:
             if is_paused:
                 status_bar.update("SYS_STATUS: PLAYBACK HALTED")
-                dashboard.update(
-                    f"[ STREAM PAUSED ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}"
-                )
+                dashboard.update(f"[ STREAM PAUSED ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}")
             else:
                 status_bar.update("SYS_STATUS: PLAYBACK RESUMED")
-                dashboard.update(
-                    f"[ AUDIO STREAM ACTIVE ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}"
-                )
-
+                dashboard.update(f"[ AUDIO STREAM ACTIVE ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}")
 
 if __name__ == "__main__":
     app = MewsicApp()
