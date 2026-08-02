@@ -1,7 +1,12 @@
+import io
 import json
 import locale
 import os
+import requests
 import mpv
+from PIL import Image
+from rich_pixels import Pixels
+from textual_image.widget import Image as KittyImage
 from bindings import MEWSIC_BINDINGS
 from textual import work
 from textual.app import App, ComposeResult
@@ -54,7 +59,6 @@ class MewsicCore:
             audio_buffer=0.1,
         )
         
-        # Set default volume explicitly
         self.player.volume = 100
         self.on_track_ended_callback = None
 
@@ -65,15 +69,20 @@ class MewsicCore:
 
     def search_songs(self, query: str):
         results = self.ytmusic.search(query, filter="songs", limit=12)
-        return [
-            {
-                "title": track.get("title", "Unknown"),
-                "artist": ", ".join([a["name"] for a in track.get("artists", [])]),
-                "id": track.get("videoId"),
-            }
-            for track in results
-            if track.get("videoId")
-        ]
+        parsed_results = []
+        for track in results:
+            if track.get("videoId"):
+                thumbnails = track.get("thumbnails", [])
+                # Grab the best available thumbnail resolution
+                thumb_url = thumbnails[-1]["url"] if thumbnails else None
+                
+                parsed_results.append({
+                    "title": track.get("title", "Unknown"),
+                    "artist": ", ".join([a["name"] for a in track.get("artists", [])]),
+                    "id": track.get("videoId"),
+                    "thumbnail": thumb_url
+                })
+        return parsed_results
 
     def get_recommendation(self, video_id: str, history: set):
         try:
@@ -112,7 +121,6 @@ class MewsicCore:
             pass
             
     def change_volume(self, delta: int) -> int:
-        """Changes the volume by the delta amount and clamps between 0-100."""
         try:
             current_vol = self.player.volume
             if current_vol is None:
@@ -225,14 +233,15 @@ class MewsicApp(App):
         color: {theme['bg']};
         text-style: bold;
     }}
-    #ascii-art {{
+    #album-art {{
         text-align: center;
+        content-align: center middle;
         text-style: bold;
         color: {theme['border']};
     }}
     #now-playing-text {{
         text-align: center;
-        margin-top: 2;
+        margin-top: 1;
         color: {theme['fg']};
     }}
     #progress-container {{
@@ -264,7 +273,7 @@ class MewsicApp(App):
     """
     BINDINGS = MEWSIC_BINDINGS
 
-    CASSETTE_ART = """
+    CASSETTE_ART = r"""
   _________________
  | ============= |
  | |  mewsic   | |
@@ -296,10 +305,10 @@ class MewsicApp(App):
                 yield TrackListView(id="results-list")
 
             with Vertical(id="right-pane"):
-                # Top right volume indicator
                 yield Label("VOL: 100%", id="volume-label")
                 
-                yield Label(self.CASSETTE_ART, id="ascii-art")
+                yield KittyImage(id="album-art")
+
                 yield Label("SYSTEM IDLE\n\nAwaiting track selection.", id="now-playing-text")
                 
                 with Horizontal(id="progress-container"):
@@ -309,6 +318,50 @@ class MewsicApp(App):
 
         yield Label("SYS_STATUS: READY", id="status-bar")
         yield Footer()
+
+    # --- New Album Art Preview Logic ---
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        """Triggers when you scroll through the list with J and K."""
+        if event.item is None:
+            return
+            
+        list_view = self.query_one("#results-list", TrackListView)
+        try:
+            index = list_view.children.index(event.item)
+            if index is not None and index < len(self.search_results):
+                selected_track = self.search_results[index]
+                if selected_track.get("thumbnail"):
+                    self.fetch_and_display_art(selected_track["thumbnail"])
+        except ValueError:
+            pass
+
+    @work(thread=True, exclusive=True)
+    def fetch_and_display_art(self, url: str) -> None:
+        """Fetches the high-res image and passes it directly to Kitty!"""
+        try:
+            response = requests.get(url, timeout=3)
+            if response.status_code == 200:
+                # Open the raw, high-res image data
+                image = Image.open(io.BytesIO(response.content))
+                
+                # Resize it slightly so it doesn't try to draw a 2000x2000px image 
+                # that overflows your terminal window memory. 400x400 looks incredibly crisp!
+                image = image.resize((400, 400))
+                
+                # Pass the raw PIL image to the main thread
+                self.call_from_thread(self.update_album_art, image)
+        except Exception:
+            pass
+
+    def update_album_art(self, pil_image: Image) -> None:
+        """Assigns the new high-res image directly to the Kitty Protocol widget."""
+        album_widget = self.query_one("#album-art", KittyImage)
+        
+        # textual-kitty automatically re-renders when you update the image property!
+        album_widget.image = pil_image    
+    
+
+    # -----------------------------------
 
     def update_progress_bar(self) -> None:
         if not self.current_track or self.core.player.pause:
@@ -364,6 +417,7 @@ class MewsicApp(App):
                 ListItem(Label(f" > {track['title']} // {track['artist']}"))
             )
 
+        # Triggers the highlight immediately for the first item
         list_view.focus()
         status_bar = self.query_one("#status-bar", Label)
         status_bar.update("SYS_STATUS: DATA RECEIVED. AWAITING EXECUTION.")
@@ -460,7 +514,6 @@ class MewsicApp(App):
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update("SYS_STATUS: SEEK -10s")
 
-    # --- New Volume Actions ---
     def action_volume_up(self) -> None:
         new_vol = self.core.change_volume(10)
         self.query_one("#volume-label", Label).update(f"VOL: {new_vol}%")
