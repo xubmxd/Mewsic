@@ -1,6 +1,7 @@
 import json
 import locale
 import os
+
 import mpv
 from bindings import MEWSIC_BINDINGS
 from textual import work
@@ -43,7 +44,7 @@ class MewsicCore:
 
         self.player = mpv.MPV(
             ytdl=True,
-            ytdl_format="bestaudio/best",
+            ytdl_format="bestaudio/best",  # Forces raw audio to prevent silent hangs
             video=False,
             vo="null",
             hwdec="no",
@@ -56,9 +57,9 @@ class MewsicCore:
         # Callback variable for when a track ends naturally
         self.on_track_ended_callback = None
 
-        # Listen for the MPV 'eof-reached' property to trigger autoplay
-        @self.player.property_observer("eof-reached")
-        def on_eof(name, value):
+        # Listen for the MPV 'idle-active' property to reliably trigger autoplay
+        @self.player.property_observer("idle-active")
+        def on_idle(name, value):
             if value is True and self.on_track_ended_callback:
                 self.on_track_ended_callback()
 
@@ -299,7 +300,7 @@ class MewsicApp(App):
             )
 
     def handle_track_ended(self) -> None:
-        """Called by MPV when a track finishes natively."""
+        """Called by MPV when a track finishes natively (or network drops)."""
         if self.upcoming_track:
             # We must use call_from_thread because mpv's callback runs in C-thread land
             self.call_from_thread(self.execute_play, self.upcoming_track)
