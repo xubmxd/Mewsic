@@ -94,6 +94,13 @@ class MewsicCore:
             pass
         return None
 
+    def get_progress(self):
+        """Returns the current playback time and total duration in seconds."""
+        try:
+            return self.player.time_pos, self.player.duration
+        except Exception:
+            return None, None
+
     def play(self, video_id: str):
         url = f"https://www.youtube.com/watch?v={video_id}"
         self.player.play(url)
@@ -189,6 +196,12 @@ class MewsicApp(App):
         margin-top: 2;
         color: {theme['fg']};
     }}
+    #progress-bar {{
+        text-align: center;
+        margin-top: 1;
+        color: {theme['accent']};
+        text-style: bold;
+    }}
     #status-bar {{
         dock: bottom;
         height: 3;
@@ -222,6 +235,10 @@ class MewsicApp(App):
 
         self.core.on_track_ended_callback = self.handle_track_ended
 
+    def on_mount(self) -> None:
+        """Starts a background timer to update the progress bar every 0.5 seconds."""
+        self.set_interval(0.5, self.update_progress_bar)
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
 
@@ -236,9 +253,36 @@ class MewsicApp(App):
                 yield Label(
                     "SYSTEM IDLE\n\nAwaiting track selection.", id="now-playing-text"
                 )
+                yield Label("", id="progress-bar") # New Progress Bar Label
 
         yield Label("SYS_STATUS: READY", id="status-bar")
         yield Footer()
+
+    def update_progress_bar(self) -> None:
+        """Fired by the interval timer to redraw the progress bar."""
+        # Don't update if we aren't playing anything or if paused
+        if not self.current_track or self.core.player.pause:
+            return
+
+        time_pos, duration = self.core.get_progress()
+
+        if time_pos is not None and duration is not None and duration > 0:
+            # Calculate percentage for the bar
+            percent = time_pos / duration
+            bar_length = 20
+            filled_length = int(bar_length * percent)
+            
+            # Create the block visual [██████░░░░]
+            bar = "█" * filled_length + "░" * (bar_length - filled_length)
+            
+            # Format seconds into MM:SS
+            def fmt_time(seconds):
+                m, s = divmod(int(seconds), 60)
+                return f"{m:02d}:{s:02d}"
+
+            # Update UI
+            progress_text = f"{fmt_time(time_pos)} [{bar}] {fmt_time(duration)}"
+            self.query_one("#progress-bar", Label).update(progress_text)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         query = event.value.strip()
@@ -299,6 +343,9 @@ class MewsicApp(App):
         dashboard.update(
             f"[ AUDIO STREAM ACTIVE ]\n\n{track['title']}\nby {track['artist']}\n\n[ CALCULATING NEXT TRACK... ]"
         )
+        
+        # Reset the progress bar visually while buffering
+        self.query_one("#progress-bar", Label).update("[ Buffering... ]")
 
         self.core.play(track["id"])
         status_bar.update(f"SYS_STATUS: PLAYBACK INITIATED")
