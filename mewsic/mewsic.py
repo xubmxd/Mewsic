@@ -2,8 +2,7 @@ import io
 import json
 import locale
 import os
-import threading  # Added for the pre-fetch worker
-
+import threading
 import mpv
 import requests
 from bindings import MEWSIC_BINDINGS
@@ -21,12 +20,12 @@ from ytmusicapi import YTMusic
 
 # --- Pywal Integration ---
 def load_pywal_colors():
-    """Fetches colors from pywal's JSON cache. Falls back to retro green if missing."""
+    """Fetches colors from pywal's JSON cache with better UI contrast."""
     colors = {
-        "bg": "#000000",
-        "fg": "#33ff00",
-        "border": "#33ff00",
-        "accent": "#66ff66",
+        "bg": "#170911",
+        "fg": "#c5c1c3",
+        "border": "#E53D42",
+        "accent": "#F14F51",
     }
     wal_file = os.path.expanduser("~/.cache/wal/colors.json")
     try:
@@ -35,8 +34,10 @@ def load_pywal_colors():
                 wal_data = json.load(f)
             colors["bg"] = wal_data["special"]["background"]
             colors["fg"] = wal_data["special"]["foreground"]
-            colors["border"] = wal_data["colors"]["color4"]
-            colors["accent"] = wal_data["colors"]["color6"]
+            # Use color2 or color3 for a slightly deeper/cleaner border edge
+            colors["border"] = wal_data["colors"]["color2"] 
+            # Use color6 or color7 for bright accents that pop against red
+            colors["accent"] = wal_data["colors"]["color6"] 
     except Exception:
         pass
     return colors
@@ -213,16 +214,16 @@ class MewsicApp(App):
 
     CSS = f"""
     Screen {{
-        background: transparent; 
+        background: {theme['bg']}; /* Solid Pywal background for maximum readability */
         color: {theme['fg']};
     }}
     Header {{
-        background: transparent;
+        background: {theme['bg']};
         color: {theme['border']};
         text-style: bold;
     }}
     Footer {{
-        background: transparent;
+        background: {theme['bg']};
         color: {theme['border']};
     }}
     #main-container {{
@@ -238,7 +239,8 @@ class MewsicApp(App):
         height: 100%;
         margin: 1;
         border: solid {theme['border']};
-        background: transparent;
+        background: {theme['bg']};
+        padding: 1;
     }}
     #volume-label {{
         width: 100%;
@@ -250,7 +252,7 @@ class MewsicApp(App):
     }}
     Input {{
         border: solid {theme['border']};
-        background: transparent;
+        background: {theme['bg']};
         color: {theme['fg']};
     }}
     Input:focus {{
@@ -258,7 +260,7 @@ class MewsicApp(App):
     }}
     ListView {{
         border: solid {theme['border']};
-        background: transparent;
+        background: {theme['bg']};
         color: {theme['fg']};
         height: 1fr;
         margin-top: 1;
@@ -276,7 +278,7 @@ class MewsicApp(App):
         dock: bottom;
         height: 3;
         border-top: solid {theme['border']};
-        background: transparent;
+        background: {theme['bg']};
         color: {theme['border']};
         content-align: center middle;
     }}
@@ -297,11 +299,20 @@ class MewsicApp(App):
         height: 1;
         width: 100%;
         margin-top: 1;
+        layout: horizontal;
     }}
-    #time-current, #time-total {{
-        width: 7;
+    #time-current {{
+        width: 6;
+        color: {theme['accent']};
     }}
-
+    #time-total {{
+        width: 6;
+        text-align: right;
+        color: {theme['accent']};
+    }}
+    #progress-bar {{
+        width: 1fr;
+    }}
     """
 
     BINDINGS = MEWSIC_BINDINGS
