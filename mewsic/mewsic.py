@@ -209,6 +209,7 @@ class InteractiveBar(Static):
 
 class MewsicApp(App):
     """A pywal-integrated TUI music player with Auto-Play and Art Caching."""
+    TITLE = "mewsic"
 
     CSS = f"""
     Screen {{
