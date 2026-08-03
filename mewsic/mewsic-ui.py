@@ -3,6 +3,7 @@ import requests
 import subprocess
 import threading
 import urwid
+
 # Import the backend logic from your original file
 from mewsic import MewsicCore
 
@@ -46,9 +47,6 @@ class MewsicApp:
         self.core = MewsicCore()
         self.core.on_track_ended_callback = self.handle_track_ended
         self.imv_process = None
-        self.play_history = set()
-        self.current_track = None
-        self.upcoming_track = None
         
         # Color Palette - 'default' background maps to terminal transparency
         self.palette = [
@@ -69,7 +67,8 @@ class MewsicApp:
         self.list_walker = urwid.SimpleFocusListWalker([])
         self.list_box = urwid.ListBox(self.list_walker)
         
-        left_pane = urwid.Pile([
+        # Save it as self.left_pane for focus control
+        self.left_pane = urwid.Pile([
             ('pack', self.search_box),
             ('pack', urwid.Divider("-")),
             self.list_box
@@ -90,9 +89,8 @@ class MewsicApp:
         ])
         right_pane = urwid.Filler(right_pile, valign='top')
 
-        # THE FIX: Explicitly tell Urwid that both column 0 and column 1 contain Box widgets
         self.columns = urwid.Columns([
-            ('weight', 60, left_pane),
+            ('weight', 60, self.left_pane),
             ('weight', 40, right_pane)
         ], dividechars=2, box_columns=[0, 1])
         
@@ -128,7 +126,7 @@ class MewsicApp:
         
         self.set_status("SYS_STATUS: DATA RECEIVED. AWAITING EXECUTION.")
         self.columns.focus_position = 0
-        self.columns.contents[0][0].focus_position = 2 
+        self.left_pane.focus_position = 2 
 
     def update_album_art(self, url):
         """Downloads the image and pushes it to an IMV overlay process."""
@@ -153,10 +151,32 @@ class MewsicApp:
                 
         threading.Thread(target=worker, daemon=True).start()
 
+    # --- Abstracted Playback & UI Synchronization ---
+    
     def execute_play(self, track):
-        self.current_track = track
-        self.upcoming_track = None
-        self.play_history.add(track["id"])
+        """Triggered when a user selects a track from the search list."""
+        self.core.play_track(track)
+        self.sync_ui_to_track()
+
+    def play_next(self):
+        """Triggered via keybind or track end."""
+        if self.core.next_track():
+            self.sync_ui_to_track()
+        else:
+            self.set_status("SYS_STATUS: STILL CALCULATING NEXT TRACK... PLEASE WAIT")
+
+    def play_previous(self):
+        """Triggered via keybind."""
+        if self.core.previous_track():
+            self.sync_ui_to_track()
+        else:
+            self.set_status("SYS_STATUS: NO PREVIOUS TRACK AVAILABLE")
+
+    def sync_ui_to_track(self):
+        """Updates the dashboard, art, and starts the recommendation worker."""
+        track = self.core.current_track
+        if not track:
+            return
 
         if track.get("thumbnail"):
             self.update_album_art(track["thumbnail"])
@@ -165,30 +185,29 @@ class MewsicApp:
         self.dashboard.set_text(
             f"[ AUDIO STREAM ACTIVE ]\n\n{track['title']}\nby {track['artist']}\n\n[ CALCULATING NEXT TRACK... ]"
         )
-
-        self.core.play(track["id"])
         self.set_status("SYS_STATUS: PLAYBACK INITIATED")
         
         def worker():
-            upcoming = self.core.get_recommendation(track["id"], self.play_history.copy())
+            # Pass the core's history explicitly
+            upcoming = self.core.get_recommendation(track["id"], self.core.play_history.copy())
             if upcoming:
                 self.loop.set_alarm_in(0, self.update_upcoming_ui, upcoming)
                 
         threading.Thread(target=worker, daemon=True).start()
 
     def update_upcoming_ui(self, loop, upcoming):
-        self.upcoming_track = upcoming
-        if self.current_track:
+        self.core.upcoming_track = upcoming
+        if self.core.current_track:
             self.dashboard.set_text(
-                f"[ AUDIO STREAM ACTIVE ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}\n\n[ UP NEXT ]\n{upcoming['title']}"
+                f"[ AUDIO STREAM ACTIVE ]\n\n{self.core.current_track['title']}\nby {self.core.current_track['artist']}\n\n[ UP NEXT ]\n{upcoming['title']}"
             )
 
     def handle_track_ended(self):
-        if self.upcoming_track:
-            self.loop.set_alarm_in(0, lambda loop, user_data: self.execute_play(self.upcoming_track))
+        if self.core.upcoming_track:
+            self.loop.set_alarm_in(0, lambda loop, user_data: self.play_next())
 
     def update_progress(self, loop, user_data):
-        if self.current_track and not self.core.player.pause:
+        if self.core.current_track and not self.core.player.pause:
             pos, dur = self.core.get_progress()
             if pos is not None and dur is not None and dur > 0:
                 m1, s1 = divmod(int(pos), 60)
@@ -205,6 +224,14 @@ class MewsicApp:
             if self.imv_process:
                 self.imv_process.terminate()
             raise urwid.ExitMainLoop()
+            
+        # --- UI Navigation ---
+        elif key == 'tab':
+            self.columns.focus_position = 0
+            if self.left_pane.focus_position == 0:
+                self.left_pane.focus_position = 2
+            else:
+                self.left_pane.focus_position = 0
         
         # --- Vim Navigation ---
         elif key == 'j':
@@ -218,23 +245,13 @@ class MewsicApp:
             except IndexError:
                 pass
                 
+        # --- Track Skipping ---
+        elif key == 'n':
+            self.play_next()
+        elif key == 'b':
+            self.play_previous()
+            
         # --- Playback Controls ---
-        elif key == ' ':
-            is_paused = self.core.toggle_pause()
-            self.set_status("SYS_STATUS: PAUSED" if is_paused else "SYS_STATUS: RESUMED")
-            
-        elif key == ']':
-            self.core.seek(10)
-        elif key == '[':
-            self.core.seek(-10)
-            
-        elif key == '+':
-            vol = self.core.change_volume(10)
-            self.vol_label.set_text(("accent", f"VOL: {vol}%"))
-        elif key == '-':
-            vol = self.core.change_volume(-10)
-            self.vol_label.set_text(("accent", f"VOL: {vol}%"))
-        
         elif key == ' ':
             is_paused = self.core.toggle_pause()
             self.set_status("SYS_STATUS: PAUSED" if is_paused else "SYS_STATUS: RESUMED")
