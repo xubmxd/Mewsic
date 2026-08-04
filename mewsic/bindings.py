@@ -15,3 +15,8 @@ MEWSIC_BINDINGS = [
     ("-", "volume_down", "Vol -"),
     ("q", "quit", "Quit App")
 ]
+
+LIST_BINDINGS = [
+    ("j", "move_down", "Down"),
+    ("k", "move_up", "Up")
+]

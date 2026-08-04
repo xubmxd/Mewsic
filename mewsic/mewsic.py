@@ -2,16 +2,19 @@ import io
 import json
 import locale
 import os
+import random
 import threading
+import gc
 import mpv
 import requests
-from bindings import MEWSIC_BINDINGS
+from bindings import MEWSIC_BINDINGS, LIST_BINDINGS
 from PIL import Image, ImageOps
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import (Footer, Header, Input, Label, ListItem, ListView,
+                             Static)
 from textual_image.widget import Image as KittyImage
 from ytmusicapi import YTMusic
 
@@ -30,8 +33,8 @@ def load_pywal_colors():
                 wal_data = json.load(f)
             colors["bg"] = wal_data["special"]["background"]
             colors["fg"] = wal_data["special"]["foreground"]
-            colors["border"] = wal_data["colors"]["color2"] 
-            colors["accent"] = wal_data["colors"]["color6"] 
+            colors["border"] = wal_data["colors"]["color2"]
+            colors["accent"] = wal_data["colors"]["color6"]
     except Exception:
         pass
     return colors
@@ -85,7 +88,7 @@ class MewsicCore:
         try:
             state = {
                 "volume": self.player.volume if self.player.volume is not None else 100,
-                "last_track": self.current_track
+                "last_track": self.current_track,
             }
             with open(self.state_file, "w") as f:
                 json.dump(state, f)
@@ -113,19 +116,31 @@ class MewsicCore:
 
     def get_recommendation(self, video_id: str, history: set):
         try:
-            res = self.ytmusic.get_watch_playlist(videoId=video_id, limit=10)
+            # Fetch a deeper pool of 30 tracks to get a solid cross-section of the vibe
+            res = self.ytmusic.get_watch_playlist(videoId=video_id, limit=30)
             tracks = res.get("tracks", [])
+
+            valid_tracks = []
+
+            # Filter out any tracks you have already played during this session
             for t in tracks:
                 vid = t.get("videoId")
                 if vid and vid not in history:
-                    thumbnails = t.get("thumbnails") or t.get("thumbnail") or []
-                    thumb_url = thumbnails[-1]["url"] if thumbnails else None
-                    return {
-                        "title": t.get("title", "Unknown"),
-                        "artist": ", ".join([a["name"] for a in t.get("artists", [])]),
-                        "id": vid,
-                        "thumbnail": thumb_url,
-                    }
+                    valid_tracks.append(t)
+
+            # Pick a random track from the top 15 unplayed to keep it fresh but accurate
+            if valid_tracks:
+                t = random.choice(valid_tracks[:15])
+
+                thumbnails = t.get("thumbnails") or t.get("thumbnail") or []
+                thumb_url = thumbnails[-1]["url"] if thumbnails else None
+
+                return {
+                    "title": t.get("title", "Unknown"),
+                    "artist": ", ".join([a["name"] for a in t.get("artists", [])]),
+                    "id": t.get("videoId"),
+                    "thumbnail": thumb_url,
+                }
         except Exception:
             pass
         return None
@@ -177,7 +192,7 @@ class MewsicCore:
 
 
 class TrackListView(ListView):
-    BINDINGS = [("j", "move_down", "Down"), ("k", "move_up", "Up")]
+    BINDINGS = LIST_BINDINGS
 
     def action_move_down(self) -> None:
         if self.index is None and len(self.children) > 0:
@@ -369,7 +384,7 @@ class MewsicApp(App):
         yield Footer()
 
     def _prefetch_worker(self, results):
-        for track in results[:15]:
+        for track in results[:5]:
             if self.stop_prefetch.is_set():
                 break
             url = track.get("thumbnail")
@@ -424,9 +439,11 @@ class MewsicApp(App):
             return
         time_pos, duration = self.core.get_progress()
         if time_pos is not None and duration is not None and duration > 0:
+
             def fmt_time(seconds):
                 m, s = divmod(int(seconds), 60)
                 return f"{m:02d}:{s:02d}"
+
             self.query_one("#time-current", Label).update(fmt_time(time_pos))
             self.query_one("#time-total", Label).update(fmt_time(duration))
             prog_bar = self.query_one("#progress-bar", InteractiveBar)
@@ -455,11 +472,17 @@ class MewsicApp(App):
         try:
             self.search_results = self.core.search_songs(query)
             self.stop_prefetch.set()
+            
             self.image_cache.clear()
+            import gc
+            gc.collect()
+            
             self.stop_prefetch = threading.Event()
+            
             threading.Thread(
                 target=self._prefetch_worker, args=(self.search_results,), daemon=True
             ).start()
+            
             self.call_from_thread(self.update_results_ui)
         except Exception as e:
             self.call_from_thread(self.show_error, str(e))
