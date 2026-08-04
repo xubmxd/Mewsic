@@ -6,21 +6,17 @@ import threading
 import mpv
 import requests
 from bindings import MEWSIC_BINDINGS
-from PIL import Image
+from PIL import Image, ImageOps
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
-from textual.widgets import (Footer, Header, Input, Label, ListItem, ListView,
-                             Static)
-# Import the stable Kitty image protocol widget
+from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 from textual_image.widget import Image as KittyImage
 from ytmusicapi import YTMusic
 
 
-# --- Pywal Integration ---
 def load_pywal_colors():
-    """Fetches colors from pywal's JSON cache with better UI contrast."""
     colors = {
         "bg": "#170911",
         "fg": "#c5c1c3",
@@ -67,7 +63,6 @@ class MewsicCore:
         self.play_history = set()
         self.previous_tracks = []
 
-        # --- NEW: State Management ---
         self.state_file = os.path.expanduser("~/.cache/mewsic_state.json")
         self.state = self.load_state()
         self.player.volume = self.state.get("volume", 100)
@@ -78,7 +73,6 @@ class MewsicCore:
                 self.on_track_ended_callback()
 
     def load_state(self):
-        """Loads the last playing state and volume from disk."""
         try:
             if os.path.exists(self.state_file):
                 with open(self.state_file, "r") as f:
@@ -88,7 +82,6 @@ class MewsicCore:
         return {"volume": 100, "last_track": None}
 
     def save_state(self):
-        """Saves current volume and track to disk."""
         try:
             state = {
                 "volume": self.player.volume if self.player.volume is not None else 100,
@@ -106,7 +99,6 @@ class MewsicCore:
             if track.get("videoId"):
                 thumbnails = track.get("thumbnails") or track.get("thumbnail") or []
                 thumb_url = thumbnails[-1]["url"] if thumbnails else None
-
                 parsed_results.append(
                     {
                         "title": track.get("title", "Unknown"),
@@ -123,13 +115,11 @@ class MewsicCore:
         try:
             res = self.ytmusic.get_watch_playlist(videoId=video_id, limit=10)
             tracks = res.get("tracks", [])
-
             for t in tracks:
                 vid = t.get("videoId")
                 if vid and vid not in history:
                     thumbnails = t.get("thumbnails") or t.get("thumbnail") or []
                     thumb_url = thumbnails[-1]["url"] if thumbnails else None
-
                     return {
                         "title": t.get("title", "Unknown"),
                         "artist": ", ".join([a["name"] for a in t.get("artists", [])]),
@@ -164,10 +154,9 @@ class MewsicCore:
             current_vol = self.player.volume
             if current_vol is None:
                 current_vol = 100
-
             new_vol = max(0, min(100, current_vol + delta))
             self.player.volume = new_vol
-            self.save_state() # Save new volume
+            self.save_state()
             return int(new_vol)
         except Exception:
             return 100
@@ -175,36 +164,16 @@ class MewsicCore:
     def play_track(self, track: dict, is_back=False):
         if not is_back and self.current_track:
             self.previous_tracks.append(self.current_track)
-
         self.current_track = track
         self.upcoming_track = None
         self.play_history.add(track["id"])
-        
-        self.save_state() # Save new track
-
+        self.save_state()
         url = f"https://www.youtube.com/watch?v={track['id']}"
         self.player.play(url)
-
-    def next_track(self):
-        if self.upcoming_track:
-            self.play_track(self.upcoming_track)
-            return self.current_track
-        return None
-
-    def previous_track(self):
-        if self.previous_tracks:
-            last_track = self.previous_tracks.pop()
-            self.play_track(last_track, is_back=True)
-            return self.current_track
-        return None
 
     def toggle_pause(self):
         self.player.pause = not self.player.pause
         return self.player.pause
-
-    def play(self, video_id: str):
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        self.player.play(url)
 
 
 class TrackListView(ListView):
@@ -235,7 +204,6 @@ class InteractiveBar(Static):
 
 
 class MewsicApp(App):
-    """A pywal-integrated TUI music player with Auto-Play and Art Caching."""
     TITLE = "mewsic"
 
     CSS = f"""
@@ -266,7 +234,7 @@ class MewsicApp(App):
         margin: 1;
         border: solid {theme['border']};
         background: {theme['bg']};
-        padding: 1;
+        padding: 0 1;
     }}
     #volume-label {{
         width: 100%;
@@ -274,7 +242,6 @@ class MewsicApp(App):
         color: {theme['accent']};
         text-style: bold;
         padding-right: 2;
-        margin-top: 1;
     }}
     Input {{
         border: solid {theme['border']};
@@ -308,17 +275,21 @@ class MewsicApp(App):
         color: {theme['border']};
         content-align: center middle;
     }}
-    
-    #album-art {{
+    #art-container {{
         height: 1fr;
         width: 100%;
-        content-align: center middle;
+        align: center middle;
+    }}
+    #album-art {{
+        width: 20;
+        height: 10;
     }}
     #info-container {{
         dock: bottom;
-        height: auto;
+        height: 10;
         width: 100%;
-        padding-top: 1;
+        padding-top: 0;
+        margin-top:1;
         border-top: dashed {theme['border']};
     }}
     #progress-container {{
@@ -347,12 +318,7 @@ class MewsicApp(App):
         super().__init__()
         self.core = MewsicCore()
         self.search_results = []
-        self.current_track = None
-        self.upcoming_track = None
-        self.play_history = set()
-
         self.core.on_track_ended_callback = self.handle_track_ended
-
         self.image_cache = {}
         self.stop_prefetch = threading.Event()
 
@@ -361,72 +327,60 @@ class MewsicApp(App):
         self.call_after_refresh(self.restore_previous_session)
 
     def restore_previous_session(self) -> None:
-        """Restores the volume label and last played track from the state cache."""
         vol = self.core.state.get("volume", 100)
         self.query_one("#volume-label", Label).update(f"VOL: {vol}%")
-
         last_track = self.core.state.get("last_track")
         if last_track:
-            self.current_track = last_track
             self.core.current_track = last_track
-            self.play_history.add(last_track["id"])
-
+            self.core.play_history.add(last_track["id"])
             if last_track.get("thumbnail"):
                 self.fetch_and_display_art(last_track["thumbnail"])
-
             dashboard = self.query_one("#now-playing-text", Label)
             dashboard.update(
                 f"[ STREAM PAUSED ]\n\n{last_track['title']}\nby {last_track['artist']}\n\n[ PRESS SPACE TO RESUME ]"
             )
-
             self.core.player.pause = True
             url = f"https://www.youtube.com/watch?v={last_track['id']}"
             self.core.player.play(url)
-
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update("SYS_STATUS: SESSION RESTORED. READY.")
-            self.fetch_recommendation(last_track["id"], self.play_history.copy())
+            self.fetch_recommendation(last_track["id"], self.core.play_history.copy())
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-
         with Horizontal(id="main-container"):
             with Vertical(id="left-pane"):
                 yield Input(placeholder="> AWAITING QUERY...", id="search-box")
                 yield TrackListView(id="results-list")
-
             with Vertical(id="right-pane"):
                 yield Label("VOL: 100%", id="volume-label")
-                yield KittyImage(id="album-art")
-
+                with Vertical(id="art-container"):
+                    yield KittyImage(id="album-art")
                 with Vertical(id="info-container"):
                     yield Label(
                         "SYSTEM IDLE\n\nAwaiting track selection.",
                         id="now-playing-text",
                     )
-
                     with Horizontal(id="progress-container"):
                         yield Label("--:--", id="time-current")
                         yield InteractiveBar("░" * 20, id="progress-bar")
                         yield Label("--:--", id="time-total")
-
         yield Label("SYS_STATUS: READY", id="status-bar")
         yield Footer()
 
     def _prefetch_worker(self, results):
-        """Silently downloads and formats images for the top results."""
         for track in results[:15]:
             if self.stop_prefetch.is_set():
                 break
             url = track.get("thumbnail")
             if not url or url in self.image_cache:
                 continue
-
             try:
                 response = requests.get(url, timeout=3)
                 if response.status_code == 200:
                     image = Image.open(io.BytesIO(response.content))
-                    image = image.resize((400, 400))
+                    image = image.convert("RGB")
+                    image = ImageOps.fit(image, (400, 400), centering=(0.5, 0.5))
                     self.image_cache[url] = image
             except Exception:
                 pass
@@ -434,7 +388,6 @@ class MewsicApp(App):
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         if event.item is None:
             return
-
         list_view = self.query_one("#results-list", TrackListView)
         try:
             index = list_view.children.index(event.item)
@@ -455,8 +408,9 @@ class MewsicApp(App):
             response = requests.get(url, timeout=3)
             if response.status_code == 200:
                 image = Image.open(io.BytesIO(response.content))
-                image = image.resize((400, 400))
-                self.image_cache[url] = image  # Cache it for next time
+                image = image.convert("RGB")
+                image = ImageOps.fit(image, (400, 400), centering=(0.5, 0.5))
+                self.image_cache[url] = image
                 self.call_from_thread(self.update_album_art, image)
         except Exception:
             pass
@@ -466,31 +420,24 @@ class MewsicApp(App):
         album_widget.image = pil_image
 
     def update_progress_bar(self) -> None:
-        if not self.current_track or self.core.player.pause:
+        if not self.core.current_track or self.core.player.pause:
             return
-
         time_pos, duration = self.core.get_progress()
-
         if time_pos is not None and duration is not None and duration > 0:
-
             def fmt_time(seconds):
                 m, s = divmod(int(seconds), 60)
                 return f"{m:02d}:{s:02d}"
-
             self.query_one("#time-current", Label).update(fmt_time(time_pos))
             self.query_one("#time-total", Label).update(fmt_time(duration))
-
             prog_bar = self.query_one("#progress-bar", InteractiveBar)
             percent = time_pos / duration
-
             bar_length = prog_bar.size.width or 20
             filled_length = int(bar_length * percent)
-
             bar_text = "█" * filled_length + "░" * (bar_length - filled_length)
             prog_bar.update(bar_text)
 
     def on_interactive_bar_seek(self, event: InteractiveBar.Seek) -> None:
-        if self.current_track:
+        if self.core.current_track:
             self.core.seek_percent(event.percent)
             self.update_progress_bar()
             status_bar = self.query_one("#status-bar", Label)
@@ -507,15 +454,12 @@ class MewsicApp(App):
     def perform_search(self, query: str) -> None:
         try:
             self.search_results = self.core.search_songs(query)
-
             self.stop_prefetch.set()
             self.image_cache.clear()
             self.stop_prefetch = threading.Event()
-
             threading.Thread(
                 target=self._prefetch_worker, args=(self.search_results,), daemon=True
             ).start()
-
             self.call_from_thread(self.update_results_ui)
         except Exception as e:
             self.call_from_thread(self.show_error, str(e))
@@ -523,12 +467,10 @@ class MewsicApp(App):
     def update_results_ui(self) -> None:
         list_view = self.query_one("#results-list", TrackListView)
         list_view.clear()
-
         for track in self.search_results:
             list_view.append(
                 ListItem(Label(f" > {track['title']} // {track['artist']}"))
             )
-
         list_view.focus()
         status_bar = self.query_one("#status-bar", Label)
         status_bar.update("SYS_STATUS: DATA RECEIVED. AWAITING EXECUTION.")
@@ -540,42 +482,28 @@ class MewsicApp(App):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         list_view = self.query_one("#results-list", TrackListView)
         index = list_view.index
-
         if index is not None and index < len(self.search_results):
             selected_track = self.search_results[index]
             self.execute_play(selected_track)
 
     def execute_play(self, track: dict, is_back: bool = False) -> None:
-        if not is_back and self.current_track:
-            self.core.previous_tracks.append(self.current_track)
-
-        self.current_track = track
-        self.upcoming_track = None
-        self.play_history.add(track["id"])
-
         if track.get("thumbnail"):
             url = track["thumbnail"]
             if url in self.image_cache:
                 self.update_album_art(self.image_cache[url])
             else:
                 self.fetch_and_display_art(url)
-
         status_bar = self.query_one("#status-bar", Label)
         status_bar.update("SYS_STATUS: BUFFERING AUDIO STREAM...")
-
         dashboard = self.query_one("#now-playing-text", Label)
         dashboard.update(
             f"[ AUDIO STREAM ACTIVE ]\n\n{track['title']}\nby {track['artist']}\n\n[ CALCULATING NEXT TRACK... ]"
         )
-
         self.query_one("#progress-bar", InteractiveBar).update("[ Buffering... ]")
-
-        # Ensure the player is active when launching normally
         self.core.player.pause = False
         self.core.play_track(track, is_back=is_back)
-        
         status_bar.update("SYS_STATUS: PLAYBACK INITIATED")
-        self.fetch_recommendation(track["id"], self.play_history.copy())
+        self.fetch_recommendation(track["id"], self.core.play_history.copy())
 
     @work(thread=True)
     def fetch_recommendation(self, video_id: str, history: set) -> None:
@@ -584,43 +512,42 @@ class MewsicApp(App):
             self.call_from_thread(self.update_upcoming_ui, video_id, upcoming)
 
     def update_upcoming_ui(self, source_video_id: str, upcoming: dict) -> None:
-        if self.current_track and self.current_track["id"] == source_video_id:
-            self.upcoming_track = upcoming
+        if self.core.current_track and self.core.current_track["id"] == source_video_id:
+            self.core.upcoming_track = upcoming
             dashboard = self.query_one("#now-playing-text", Label)
             dashboard.update(
-                f"[ AUDIO STREAM ACTIVE ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}\n\n[ UP NEXT ]\n{upcoming['title']}"
+                f"[ AUDIO STREAM ACTIVE ]\n\n{self.core.current_track['title']}\nby {self.core.current_track['artist']}\n\n[ UP NEXT ]\n{upcoming['title']}"
             )
 
     def handle_track_ended(self) -> None:
-        if self.upcoming_track:
-            self.call_from_thread(self.execute_play, self.upcoming_track)
+        if self.core.upcoming_track:
+            self.call_from_thread(self.execute_play, self.core.upcoming_track)
 
     def action_toggle_playback(self) -> None:
         is_paused = self.core.toggle_pause()
         status_bar = self.query_one("#status-bar", Label)
         dashboard = self.query_one("#now-playing-text", Label)
-
-        if self.current_track:
+        if self.core.current_track:
             next_text = (
-                f"\n\n[ UP NEXT ]\n{self.upcoming_track['title']}"
-                if self.upcoming_track
+                f"\n\n[ UP NEXT ]\n{self.core.upcoming_track['title']}"
+                if self.core.upcoming_track
                 else "\n\n[ CALCULATING NEXT TRACK... ]"
             )
             if is_paused:
                 status_bar.update("SYS_STATUS: PLAYBACK HALTED")
                 dashboard.update(
-                    f"[ STREAM PAUSED ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}{next_text}"
+                    f"[ STREAM PAUSED ]\n\n{self.core.current_track['title']}\nby {self.core.current_track['artist']}{next_text}"
                 )
             else:
                 status_bar.update("SYS_STATUS: PLAYBACK RESUMED")
                 dashboard.update(
-                    f"[ AUDIO STREAM ACTIVE ]\n\n{self.current_track['title']}\nby {self.current_track['artist']}{next_text}"
+                    f"[ AUDIO STREAM ACTIVE ]\n\n{self.core.current_track['title']}\nby {self.core.current_track['artist']}{next_text}"
                 )
 
     def action_skip_track(self) -> None:
-        if self.upcoming_track:
-            self.execute_play(self.upcoming_track)
-        elif self.current_track:
+        if self.core.upcoming_track:
+            self.execute_play(self.core.upcoming_track)
+        elif self.core.current_track:
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update(
                 "SYS_STATUS: STILL CALCULATING NEXT TRACK... PLEASE WAIT."
@@ -635,14 +562,14 @@ class MewsicApp(App):
             status_bar.update("SYS_STATUS: NO PREVIOUS TRACK AVAILABLE")
 
     def action_seek_forward(self) -> None:
-        if self.current_track:
+        if self.core.current_track:
             self.core.seek(10)
             self.update_progress_bar()
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update("SYS_STATUS: SEEK +10s")
 
     def action_seek_backward(self) -> None:
-        if self.current_track:
+        if self.core.current_track:
             self.core.seek(-10)
             self.update_progress_bar()
             status_bar = self.query_one("#status-bar", Label)
