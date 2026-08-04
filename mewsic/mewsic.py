@@ -34,9 +34,7 @@ def load_pywal_colors():
                 wal_data = json.load(f)
             colors["bg"] = wal_data["special"]["background"]
             colors["fg"] = wal_data["special"]["foreground"]
-            # Use color2 or color3 for a slightly deeper/cleaner border edge
             colors["border"] = wal_data["colors"]["color2"] 
-            # Use color6 or color7 for bright accents that pop against red
             colors["accent"] = wal_data["colors"]["color6"] 
     except Exception:
         pass
@@ -63,18 +61,43 @@ class MewsicCore:
             audio_buffer=0.1,
         )
 
-        self.player.volume = 100
         self.on_track_ended_callback = None
-
         self.current_track = None
         self.upcoming_track = None
         self.play_history = set()
         self.previous_tracks = []
 
+        # --- NEW: State Management ---
+        self.state_file = os.path.expanduser("~/.cache/mewsic_state.json")
+        self.state = self.load_state()
+        self.player.volume = self.state.get("volume", 100)
+
         @self.player.property_observer("idle-active")
         def on_idle(name, value):
             if value is True and self.on_track_ended_callback:
                 self.on_track_ended_callback()
+
+    def load_state(self):
+        """Loads the last playing state and volume from disk."""
+        try:
+            if os.path.exists(self.state_file):
+                with open(self.state_file, "r") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {"volume": 100, "last_track": None}
+
+    def save_state(self):
+        """Saves current volume and track to disk."""
+        try:
+            state = {
+                "volume": self.player.volume if self.player.volume is not None else 100,
+                "last_track": self.current_track
+            }
+            with open(self.state_file, "w") as f:
+                json.dump(state, f)
+        except Exception:
+            pass
 
     def search_songs(self, query: str):
         results = self.ytmusic.search(query, filter="songs", limit=12)
@@ -144,6 +167,7 @@ class MewsicCore:
 
             new_vol = max(0, min(100, current_vol + delta))
             self.player.volume = new_vol
+            self.save_state() # Save new volume
             return int(new_vol)
         except Exception:
             return 100
@@ -155,6 +179,8 @@ class MewsicCore:
         self.current_track = track
         self.upcoming_track = None
         self.play_history.add(track["id"])
+        
+        self.save_state() # Save new track
 
         url = f"https://www.youtube.com/watch?v={track['id']}"
         self.player.play(url)
@@ -214,7 +240,7 @@ class MewsicApp(App):
 
     CSS = f"""
     Screen {{
-        background: {theme['bg']}; /* Solid Pywal background for maximum readability */
+        background: {theme['bg']};
         color: {theme['fg']};
     }}
     Header {{
@@ -327,12 +353,39 @@ class MewsicApp(App):
 
         self.core.on_track_ended_callback = self.handle_track_ended
 
-        # --- NEW: Image Pre-fetching Cache ---
         self.image_cache = {}
         self.stop_prefetch = threading.Event()
 
     def on_mount(self) -> None:
         self.set_interval(0.5, self.update_progress_bar)
+        self.call_after_refresh(self.restore_previous_session)
+
+    def restore_previous_session(self) -> None:
+        """Restores the volume label and last played track from the state cache."""
+        vol = self.core.state.get("volume", 100)
+        self.query_one("#volume-label", Label).update(f"VOL: {vol}%")
+
+        last_track = self.core.state.get("last_track")
+        if last_track:
+            self.current_track = last_track
+            self.core.current_track = last_track
+            self.play_history.add(last_track["id"])
+
+            if last_track.get("thumbnail"):
+                self.fetch_and_display_art(last_track["thumbnail"])
+
+            dashboard = self.query_one("#now-playing-text", Label)
+            dashboard.update(
+                f"[ STREAM PAUSED ]\n\n{last_track['title']}\nby {last_track['artist']}\n\n[ PRESS SPACE TO RESUME ]"
+            )
+
+            self.core.player.pause = True
+            url = f"https://www.youtube.com/watch?v={last_track['id']}"
+            self.core.player.play(url)
+
+            status_bar = self.query_one("#status-bar", Label)
+            status_bar.update("SYS_STATUS: SESSION RESTORED. READY.")
+            self.fetch_recommendation(last_track["id"], self.play_history.copy())
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -389,7 +442,6 @@ class MewsicApp(App):
                 selected_track = self.search_results[index]
                 if selected_track.get("thumbnail"):
                     url = selected_track["thumbnail"]
-                    # Instantly load from cache if available, otherwise fetch
                     if url in self.image_cache:
                         self.update_album_art(self.image_cache[url])
                     else:
@@ -456,12 +508,10 @@ class MewsicApp(App):
         try:
             self.search_results = self.core.search_songs(query)
 
-            # Stop any ongoing prefetch and clear cache for new search
             self.stop_prefetch.set()
             self.image_cache.clear()
             self.stop_prefetch = threading.Event()
 
-            # Start prefetching top 15 results
             threading.Thread(
                 target=self._prefetch_worker, args=(self.search_results,), daemon=True
             ).start()
@@ -496,7 +546,6 @@ class MewsicApp(App):
             self.execute_play(selected_track)
 
     def execute_play(self, track: dict, is_back: bool = False) -> None:
-        # Push to history if we are moving forward
         if not is_back and self.current_track:
             self.core.previous_tracks.append(self.current_track)
 
@@ -512,7 +561,7 @@ class MewsicApp(App):
                 self.fetch_and_display_art(url)
 
         status_bar = self.query_one("#status-bar", Label)
-        status_bar.update(f"SYS_STATUS: BUFFERING AUDIO STREAM...")
+        status_bar.update("SYS_STATUS: BUFFERING AUDIO STREAM...")
 
         dashboard = self.query_one("#now-playing-text", Label)
         dashboard.update(
@@ -521,8 +570,11 @@ class MewsicApp(App):
 
         self.query_one("#progress-bar", InteractiveBar).update("[ Buffering... ]")
 
-        self.core.play(track["id"])
-        status_bar.update(f"SYS_STATUS: PLAYBACK INITIATED")
+        # Ensure the player is active when launching normally
+        self.core.player.pause = False
+        self.core.play_track(track, is_back=is_back)
+        
+        status_bar.update("SYS_STATUS: PLAYBACK INITIATED")
         self.fetch_recommendation(track["id"], self.play_history.copy())
 
     @work(thread=True)
