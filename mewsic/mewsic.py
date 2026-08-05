@@ -117,7 +117,7 @@ class MewsicCore:
     def get_recommendation(self, video_id: str, history: set):
         try:
             radio_id = f"RDAMVM{video_id}"
-            res = self.ytmusic.get_watch_playlist(radioId=radio_id, limit=30)
+            res = self.ytmusic.get_watch_playlist(playlistId=radio_id, limit=30)
             tracks = res.get("tracks", [])
 
             for t in tracks:
@@ -132,7 +132,7 @@ class MewsicCore:
                         "id": t.get("videoId"),
                         "thumbnail": thumb_url,
                     }
-        except Exception:
+        except Exception as e:
             pass
         return None
 
