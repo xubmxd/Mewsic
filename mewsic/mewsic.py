@@ -116,31 +116,22 @@ class MewsicCore:
 
     def get_recommendation(self, video_id: str, history: set):
         try:
-            # Fetch a deeper pool of 30 tracks to get a solid cross-section of the vibe
-            res = self.ytmusic.get_watch_playlist(videoId=video_id, limit=30)
+            radio_id = f"RDAMVM{video_id}"
+            res = self.ytmusic.get_watch_playlist(radioId=radio_id, limit=30)
             tracks = res.get("tracks", [])
 
-            valid_tracks = []
-
-            # Filter out any tracks you have already played during this session
             for t in tracks:
                 vid = t.get("videoId")
                 if vid and vid not in history:
-                    valid_tracks.append(t)
+                    thumbnails = t.get("thumbnails") or t.get("thumbnail") or []
+                    thumb_url = thumbnails[-1]["url"] if thumbnails else None
 
-            # Pick a random track from the top 15 unplayed to keep it fresh but accurate
-            if valid_tracks:
-                t = random.choice(valid_tracks[:15])
-
-                thumbnails = t.get("thumbnails") or t.get("thumbnail") or []
-                thumb_url = thumbnails[-1]["url"] if thumbnails else None
-
-                return {
-                    "title": t.get("title", "Unknown"),
-                    "artist": ", ".join([a["name"] for a in t.get("artists", [])]),
-                    "id": t.get("videoId"),
-                    "thumbnail": thumb_url,
-                }
+                    return {
+                        "title": t.get("title", "Unknown"),
+                        "artist": ", ".join([a["name"] for a in t.get("artists", [])]),
+                        "id": t.get("videoId"),
+                        "thumbnail": thumb_url,
+                    }
         except Exception:
             pass
         return None
