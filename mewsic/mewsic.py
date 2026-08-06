@@ -64,6 +64,7 @@ class MewsicCore:
         self.upcoming_track = None
         self.play_history = set()
         self.previous_tracks = []
+        self.looping = False
 
         self.state_file = os.path.expanduser("~/.cache/mewsic_state.json")
         self.state = self.load_state()
@@ -112,6 +113,10 @@ class MewsicCore:
                     }
                 )
         return parsed_results
+
+    def toggle_loop(self) -> bool:
+        self.looping = not self.looping
+        return self.looping
 
     def get_recommendation(self, video_id: str, history: set):
         try:
@@ -326,6 +331,26 @@ class MewsicApp(App):
         self.core.on_track_ended_callback = self.handle_track_ended
         self.image_cache = {}
         self.stop_prefetch = threading.Event()
+    
+    def action_toggle_loop(self) -> None:
+        is_looping = self.core.toggle_loop()
+        
+        status_bar = self.query_one("#status-bar", Label)
+        state_str = "ENABLED" if is_looping else "DISABLED"
+        status_bar.update(f"SYS_STATUS: TRACK LOOP {state_str}")
+        
+        if self.core.current_track:
+            dashboard = self.query_one("#now-playing-text", Label)
+            next_text = (
+                "\n\n[ LOOPING CURRENT TRACK ]" if is_looping 
+                else (f"\n\n[ UP NEXT ]\n{self.core.upcoming_track['title']}" if self.core.upcoming_track else "\n\n[ CALCULATING NEXT TRACK... ]")
+            )
+            state_text = "[ STREAM PAUSED ]" if self.core.player.pause else "[ AUDIO STREAM ACTIVE ]"
+            
+            dashboard.update(
+                f"{state_text}\n\n{self.core.current_track['title']}\nby {self.core.current_track['artist']}{next_text}"
+            )
+
 
     def on_mount(self) -> None:
         self.set_interval(0.5, self.update_progress_bar)
@@ -533,7 +558,10 @@ class MewsicApp(App):
             )
 
     def handle_track_ended(self) -> None:
-        if self.core.upcoming_track:
+        if self.core.looping and self.core.current_track:
+            url = f"https://www.youtube.com/watch?v={self.core.current_track['id']}"
+            self.core.player.play(url)
+        elif self.core.upcoming_track:
             self.call_from_thread(self.execute_play, self.core.upcoming_track)
 
     def action_toggle_playback(self) -> None:
