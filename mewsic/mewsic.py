@@ -57,7 +57,6 @@ class MewsicCore:
             cache="yes",
             demuxer_max_bytes=4_000_000,
             demuxer_max_back_bytes=0,
-            audio_buffer=0.1,
         )
 
         self.on_track_ended_callback = None
@@ -210,7 +209,7 @@ class InteractiveBar(Static):
 
 
 class MewsicApp(App):
-    TITLE = "mewsic"
+    TITLE = "Mewsic"
 
     CSS = f"""
     Screen {{
@@ -353,7 +352,7 @@ class MewsicApp(App):
             self.fetch_recommendation(last_track["id"], self.core.play_history.copy())
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield Header(show_clock=True, icon="󰄛")
         with Horizontal(id="main-container"):
             with Vertical(id="left-pane"):
                 yield Input(placeholder="> AWAITING QUERY...", id="search-box")
