@@ -473,11 +473,10 @@ class MewsicApp(App):
                 "SYS_STATUS: FETCHING STARTUP RECOMMENDATIONS..."
             )
             
-            # 1. Use the core function we just fixed instead of rewriting the API call!
+            # 1. Fetch recommendations using our stable core function
             upcoming_list, err = self.core.get_recommendation(last_video_id, self.core.play_history.copy())
             
-            # 2. THE BULLETPROOF FALLBACK: 
-            # If the YT Music radio API completely fails for this specific song, fallback to an artist search!
+            # 2. The Fallback: If YT Music radio fails, grab the artist's discography
             if not upcoming_list:
                 artist = self.core.current_track.get("artist", "") if self.core.current_track else ""
                 if artist:
@@ -487,20 +486,10 @@ class MewsicApp(App):
                     )
                     upcoming_list = self.core.search_songs(artist)
 
-            # 3. Populate the UI
+            # 3. THE FIX: Pass the list to update_upcoming_ui instead of manually handling it!
+            # This sets the upcoming_track, updates the dashboard, AND populates the left pane.
             if upcoming_list:
-                self.search_results = upcoming_list
-                self.stop_prefetch.set()
-                self.image_cache.clear()
-                import gc
-                gc.collect()
-                
-                self.stop_prefetch = threading.Event()
-                threading.Thread(
-                    target=self._prefetch_worker, args=(self.search_results,), daemon=True
-                ).start()
-                
-                self.call_from_thread(self.update_results_ui)
+                self.call_from_thread(self.update_upcoming_ui, last_video_id, upcoming_list)
             else:
                 self.call_from_thread(self.show_error, f"REC_ERR: {err or 'No tracks found'}")
                 
