@@ -473,36 +473,37 @@ class MewsicApp(App):
                 "SYS_STATUS: FETCHING STARTUP RECOMMENDATIONS..."
             )
             
-            res = self.core.ytmusic.get_watch_playlist(videoId=last_video_id)
-            tracks = res.get("tracks", [])
+            # 1. Use the core function we just fixed instead of rewriting the API call!
+            upcoming_list, err = self.core.get_recommendation(last_video_id, self.core.play_history.copy())
             
-            parsed_results = []
-            for track in tracks:
-                vid = track.get("videoId")
-                if vid:
-                    thumbnails = track.get("thumbnails") or track.get("thumbnail") or []
-                    thumb_url = thumbnails[-1]["url"] if thumbnails else None
-                    parsed_results.append({
-                        "title": track.get("title", "Unknown"),
-                        "artist": ", ".join([a["name"] for a in track.get("artists", []) if "name" in a]),
-                        "id": vid,
-                        "thumbnail": thumb_url,
-                    })
-            
-            self.search_results = parsed_results
-            
-            self.stop_prefetch.set()
-            self.image_cache.clear()
-            import gc
-            gc.collect()
-            
-            self.stop_prefetch = threading.Event()
-            threading.Thread(
-                target=self._prefetch_worker, args=(self.search_results,), daemon=True
-            ).start()
-            
-            self.call_from_thread(self.update_results_ui)
-            
+            # 2. THE BULLETPROOF FALLBACK: 
+            # If the YT Music radio API completely fails for this specific song, fallback to an artist search!
+            if not upcoming_list:
+                artist = self.core.current_track.get("artist", "") if self.core.current_track else ""
+                if artist:
+                    self.call_from_thread(
+                        self.query_one("#status-bar", Label).update, 
+                        "SYS_STATUS: RADIO FAILED. FETCHING ARTIST DISCOGRAPHY..."
+                    )
+                    upcoming_list = self.core.search_songs(artist)
+
+            # 3. Populate the UI
+            if upcoming_list:
+                self.search_results = upcoming_list
+                self.stop_prefetch.set()
+                self.image_cache.clear()
+                import gc
+                gc.collect()
+                
+                self.stop_prefetch = threading.Event()
+                threading.Thread(
+                    target=self._prefetch_worker, args=(self.search_results,), daemon=True
+                ).start()
+                
+                self.call_from_thread(self.update_results_ui)
+            else:
+                self.call_from_thread(self.show_error, f"REC_ERR: {err or 'No tracks found'}")
+                
         except Exception as e:
             self.call_from_thread(self.show_error, f"REC_ERR: {str(e)}")
 
