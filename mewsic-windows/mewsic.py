@@ -126,14 +126,11 @@ class MewsicCore:
 
     def get_recommendation(self, video_id: str, history: set):
         try:
-            try:
-                res = self.ytmusic.get_watch_playlist(videoId=video_id, radio=True)
-            except Exception:
-                res = self.ytmusic.get_watch_playlist(playlistId=f"RDAMVM{video_id}")
-
+            # Keep it as simple as possible for the API
+            res = self.ytmusic.get_watch_playlist(videoId=video_id)
             tracks = res.get("tracks", [])
+
             recommendations = []
-            
             for t in tracks:
                 vid = t.get("videoId")
                 if vid and vid not in history:
