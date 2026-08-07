@@ -469,44 +469,40 @@ class MewsicApp(App):
     def load_startup_recommendations(self, last_video_id: str) -> None:
         try:
             self.call_from_thread(
-                self.query_one("#status-bar", Label).update,
-                "SYS_STATUS: FETCHING STARTUP RECOMMENDATIONS...",
+                self.query_one("#status-bar", Label).update, 
+                "SYS_STATUS: FETCHING STARTUP RECOMMENDATIONS..."
             )
-
-            # Fetch a radio playlist based on the last track
-            radio_id = f"RDAMVM{last_video_id}"
-            res = self.core.ytmusic.get_watch_playlist(playlistId=radio_id, limit=12)
+            
+            res = self.core.ytmusic.get_watch_playlist(videoId=last_video_id)
             tracks = res.get("tracks", [])
-
+            
             parsed_results = []
             for track in tracks:
                 vid = track.get("videoId")
                 if vid:
                     thumbnails = track.get("thumbnails") or track.get("thumbnail") or []
                     thumb_url = thumbnails[-1]["url"] if thumbnails else None
-                    parsed_results.append(
-                        {
-                            "title": track.get("title", "Unknown"),
-                            "artist": ", ".join(
-                                [a["name"] for a in track.get("artists", [])]
-                            ),
-                            "id": vid,
-                            "thumbnail": thumb_url,
-                        }
-                    )
-
+                    parsed_results.append({
+                        "title": track.get("title", "Unknown"),
+                        "artist": ", ".join([a["name"] for a in track.get("artists", []) if "name" in a]),
+                        "id": vid,
+                        "thumbnail": thumb_url,
+                    })
+            
             self.search_results = parsed_results
-
-            # Utilize the existing prefetch worker for album art
+            
             self.stop_prefetch.set()
             self.image_cache.clear()
+            import gc
+            gc.collect()
+            
             self.stop_prefetch = threading.Event()
             threading.Thread(
                 target=self._prefetch_worker, args=(self.search_results,), daemon=True
             ).start()
-
+            
             self.call_from_thread(self.update_results_ui)
-
+            
         except Exception as e:
             self.call_from_thread(self.show_error, f"REC_ERR: {str(e)}")
 
