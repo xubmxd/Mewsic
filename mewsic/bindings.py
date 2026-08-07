@@ -13,6 +13,7 @@ MEWSIC_BINDINGS = [
     ("left", "seek_backward", "Seek -10s"),
     ("=", "volume_up", "Vol +"),
     ("-", "volume_down", "Vol -"),
+    ("l", "toggle_loop", "Loop Track"),
     ("q", "quit", "Quit App")
 ]
 

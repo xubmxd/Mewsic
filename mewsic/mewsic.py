@@ -1,13 +1,14 @@
+import gc
 import io
 import json
 import locale
 import os
 import random
 import threading
-import gc
+
 import mpv
 import requests
-from bindings import MEWSIC_BINDINGS, LIST_BINDINGS
+from bindings import LIST_BINDINGS, MEWSIC_BINDINGS
 from PIL import Image, ImageOps
 from textual import work
 from textual.app import App, ComposeResult
@@ -124,21 +125,27 @@ class MewsicCore:
             res = self.ytmusic.get_watch_playlist(playlistId=radio_id, limit=30)
             tracks = res.get("tracks", [])
 
+            recommendations = []
             for t in tracks:
                 vid = t.get("videoId")
                 if vid and vid not in history:
                     thumbnails = t.get("thumbnails") or t.get("thumbnail") or []
                     thumb_url = thumbnails[-1]["url"] if thumbnails else None
 
-                    return {
-                        "title": t.get("title", "Unknown"),
-                        "artist": ", ".join([a["name"] for a in t.get("artists", [])]),
-                        "id": t.get("videoId"),
-                        "thumbnail": thumb_url,
-                    }
+                    recommendations.append(
+                        {
+                            "title": t.get("title", "Unknown"),
+                            "artist": ", ".join(
+                                [a["name"] for a in t.get("artists", [])]
+                            ),
+                            "id": t.get("videoId"),
+                            "thumbnail": thumb_url,
+                        }
+                    )
+            return recommendations  # Now returning a full list of dictionaries
         except Exception as e:
             pass
-        return None
+        return []
 
     def get_progress(self):
         try:
@@ -331,26 +338,34 @@ class MewsicApp(App):
         self.core.on_track_ended_callback = self.handle_track_ended
         self.image_cache = {}
         self.stop_prefetch = threading.Event()
-    
+
     def action_toggle_loop(self) -> None:
         is_looping = self.core.toggle_loop()
-        
+
         status_bar = self.query_one("#status-bar", Label)
         state_str = "ENABLED" if is_looping else "DISABLED"
         status_bar.update(f"SYS_STATUS: TRACK LOOP {state_str}")
-        
+
         if self.core.current_track:
             dashboard = self.query_one("#now-playing-text", Label)
             next_text = (
-                "\n\n[ LOOPING CURRENT TRACK ]" if is_looping 
-                else (f"\n\n[ UP NEXT ]\n{self.core.upcoming_track['title']}" if self.core.upcoming_track else "\n\n[ CALCULATING NEXT TRACK... ]")
+                "\n\n[ LOOPING CURRENT TRACK ]"
+                if is_looping
+                else (
+                    f"\n\n[ UP NEXT ]\n{self.core.upcoming_track['title']}"
+                    if self.core.upcoming_track
+                    else "\n\n[ CALCULATING NEXT TRACK... ]"
+                )
             )
-            state_text = "[ STREAM PAUSED ]" if self.core.player.pause else "[ AUDIO STREAM ACTIVE ]"
-            
+            state_text = (
+                "[ STREAM PAUSED ]"
+                if self.core.player.pause
+                else "[ AUDIO STREAM ACTIVE ]"
+            )
+
             dashboard.update(
                 f"{state_text}\n\n{self.core.current_track['title']}\nby {self.core.current_track['artist']}{next_text}"
             )
-
 
     def on_mount(self) -> None:
         self.set_interval(0.5, self.update_progress_bar)
@@ -375,6 +390,7 @@ class MewsicApp(App):
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update("SYS_STATUS: SESSION RESTORED. READY.")
             self.fetch_recommendation(last_track["id"], self.core.play_history.copy())
+            self.load_startup_recommendations(last_track["id"])
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True, icon="󰄛")
@@ -432,6 +448,51 @@ class MewsicApp(App):
         except ValueError:
             pass
 
+    @work(thread=True)
+    def load_startup_recommendations(self, last_video_id: str) -> None:
+        try:
+            self.call_from_thread(
+                self.query_one("#status-bar", Label).update,
+                "SYS_STATUS: FETCHING STARTUP RECOMMENDATIONS...",
+            )
+
+            # Fetch a radio playlist based on the last track
+            radio_id = f"RDAMVM{last_video_id}"
+            res = self.core.ytmusic.get_watch_playlist(playlistId=radio_id, limit=12)
+            tracks = res.get("tracks", [])
+
+            parsed_results = []
+            for track in tracks:
+                vid = track.get("videoId")
+                if vid:
+                    thumbnails = track.get("thumbnails") or track.get("thumbnail") or []
+                    thumb_url = thumbnails[-1]["url"] if thumbnails else None
+                    parsed_results.append(
+                        {
+                            "title": track.get("title", "Unknown"),
+                            "artist": ", ".join(
+                                [a["name"] for a in track.get("artists", [])]
+                            ),
+                            "id": vid,
+                            "thumbnail": thumb_url,
+                        }
+                    )
+
+            self.search_results = parsed_results
+
+            # Utilize the existing prefetch worker for album art
+            self.stop_prefetch.set()
+            self.image_cache.clear()
+            self.stop_prefetch = threading.Event()
+            threading.Thread(
+                target=self._prefetch_worker, args=(self.search_results,), daemon=True
+            ).start()
+
+            self.call_from_thread(self.update_results_ui)
+
+        except Exception as e:
+            self.call_from_thread(self.show_error, f"REC_ERR: {str(e)}")
+
     @work(thread=True, exclusive=True)
     def fetch_and_display_art(self, url: str) -> None:
         try:
@@ -487,17 +548,18 @@ class MewsicApp(App):
         try:
             self.search_results = self.core.search_songs(query)
             self.stop_prefetch.set()
-            
+
             self.image_cache.clear()
             import gc
+
             gc.collect()
-            
+
             self.stop_prefetch = threading.Event()
-            
+
             threading.Thread(
                 target=self._prefetch_worker, args=(self.search_results,), daemon=True
             ).start()
-            
+
             self.call_from_thread(self.update_results_ui)
         except Exception as e:
             self.call_from_thread(self.show_error, str(e))
@@ -545,17 +607,39 @@ class MewsicApp(App):
 
     @work(thread=True)
     def fetch_recommendation(self, video_id: str, history: set) -> None:
-        upcoming = self.core.get_recommendation(video_id, history)
-        if upcoming:
-            self.call_from_thread(self.update_upcoming_ui, video_id, upcoming)
+        upcoming_list = self.core.get_recommendation(video_id, history)
+        if upcoming_list:
+            self.call_from_thread(self.update_upcoming_ui, video_id, upcoming_list)
 
-    def update_upcoming_ui(self, source_video_id: str, upcoming: dict) -> None:
+    def update_upcoming_ui(self, source_video_id: str, upcoming_list: list) -> None:
         if self.core.current_track and self.core.current_track["id"] == source_video_id:
-            self.core.upcoming_track = upcoming
+            if not upcoming_list:
+                return
+            
+            self.core.upcoming_track = upcoming_list[0]
             dashboard = self.query_one("#now-playing-text", Label)
             dashboard.update(
-                f"[ AUDIO STREAM ACTIVE ]\n\n{self.core.current_track['title']}\nby {self.core.current_track['artist']}\n\n[ UP NEXT ]\n{upcoming['title']}"
+                f"[ AUDIO STREAM ACTIVE ]\n\n{self.core.current_track['title']}\nby {self.core.current_track['artist']}\n\n[ UP NEXT ]\n{self.core.upcoming_track['title']}"
             )
+            
+            self.search_results = upcoming_list
+            
+            self.stop_prefetch.set()
+            self.image_cache.clear()
+            import gc
+            gc.collect()
+            self.stop_prefetch = threading.Event()
+            
+            threading.Thread(
+                target=self._prefetch_worker, args=(self.search_results,), daemon=True
+            ).start()
+            
+            # 4. Trigger the UI update for the ListView
+            self.update_results_ui()
+            
+            # Optional: Update the status bar
+            status_bar = self.query_one("#status-bar", Label)
+            status_bar.update("SYS_STATUS: RECOMMENDATIONS LOADED.")
 
     def handle_track_ended(self) -> None:
         if self.core.looping and self.core.current_track:
