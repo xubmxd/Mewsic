@@ -126,10 +126,14 @@ class MewsicCore:
 
     def get_recommendation(self, video_id: str, history: set):
         try:
-            res = self.ytmusic.get_watch_playlist(videoId=video_id, limit=30)
-            tracks = res.get("tracks", [])
+            try:
+                res = self.ytmusic.get_watch_playlist(videoId=video_id, radio=True)
+            except Exception:
+                res = self.ytmusic.get_watch_playlist(playlistId=f"RDAMVM{video_id}")
 
+            tracks = res.get("tracks", [])
             recommendations = []
+            
             for t in tracks:
                 vid = t.get("videoId")
                 if vid and vid not in history:
@@ -138,13 +142,14 @@ class MewsicCore:
 
                     recommendations.append({
                         "title": t.get("title", "Unknown"),
-                        "artist": ", ".join([a["name"] for a in t.get("artists", [])]),
+                        "artist": ", ".join([a["name"] for a in t.get("artists", []) if "name" in a]),
                         "id": vid,
                         "thumbnail": thumb_url,
                     })
+                    
             return recommendations, None
         except Exception as e:
-            return [], str(e) 
+            return [], str(e)
 
     def get_progress(self):
         try:
