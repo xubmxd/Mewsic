@@ -126,7 +126,6 @@ class MewsicCore:
 
     def get_recommendation(self, video_id: str, history: set):
         try:
-            # Keep it as simple as possible for the API
             res = self.ytmusic.get_watch_playlist(videoId=video_id)
             tracks = res.get("tracks", [])
 
@@ -143,6 +142,23 @@ class MewsicCore:
                         "id": vid,
                         "thumbnail": thumb_url,
                     })
+            
+            # THE FIX: If history wiped out all recommendations, relax the filter!
+            if not recommendations and tracks:
+                for t in tracks:
+                    vid = t.get("videoId")
+                    # Just make sure we don't play the EXACT same song twice in a row
+                    if vid and vid != video_id:
+                        thumbnails = t.get("thumbnails") or t.get("thumbnail") or []
+                        thumb_url = thumbnails[-1]["url"] if thumbnails else None
+                        recommendations.append({
+                            "title": t.get("title", "Unknown"),
+                            "artist": ", ".join([a["name"] for a in t.get("artists", []) if "name" in a]),
+                            "id": vid,
+                            "thumbnail": thumb_url,
+                        })
+                # Shuffle so the loop breaks!
+                random.shuffle(recommendations)
 
             return recommendations, None
         except Exception as e:
@@ -474,10 +490,8 @@ class MewsicApp(App):
                 "SYS_STATUS: FETCHING STARTUP RECOMMENDATIONS..."
             )
 
-            # 1. Fetch recommendations using our stable core function
             upcoming_list, err = self.core.get_recommendation(last_video_id, self.core.play_history.copy())
 
-            # 2. The Fallback: If YT Music radio fails, grab the artist's discography
             if not upcoming_list:
                 artist = self.core.current_track.get("artist", "") if self.core.current_track else ""
                 if artist:
@@ -485,10 +499,14 @@ class MewsicApp(App):
                         self.query_one("#status-bar", Label).update,
                         "SYS_STATUS: RADIO FAILED. FETCHING ARTIST DISCOGRAPHY..."
                     )
-                    upcoming_list = self.core.search_songs(artist)
+                    artist_tracks = self.core.search_songs(artist)
+                    
+                    # THE FIX: Filter against history here too
+                    upcoming_list = [t for t in artist_tracks if t["id"] not in self.core.play_history]
+                    if not upcoming_list:
+                        upcoming_list = artist_tracks
+                        random.shuffle(upcoming_list)
 
-            # 3. THE FIX: Pass the list to update_upcoming_ui instead of manually handling it!
-            # This sets the upcoming_track, updates the dashboard, AND populates the left pane.
             if upcoming_list:
                 self.call_from_thread(self.update_upcoming_ui, last_video_id, upcoming_list)
             else:
@@ -615,20 +633,28 @@ class MewsicApp(App):
 
     @work(thread=True, exclusive=True)
     def fetch_recommendation(self, video_id: str, history: set) -> None:
-            upcoming_list, err = self.core.get_recommendation(video_id, history)
+        upcoming_list, err = self.core.get_recommendation(video_id, history)
 
-            # Fallback: If radio returned nothing, search the current artist's discography
-            if not upcoming_list:
-                artist = self.core.current_track.get("artist", "") if self.core.current_track else ""
-                if artist:
-                    upcoming_list = self.core.search_songs(artist)
+        # Fallback: If radio returned nothing, search the current artist's discography
+        if not upcoming_list:
+            artist = self.core.current_track.get("artist", "") if self.core.current_track else ""
+            if artist:
+                artist_tracks = self.core.search_songs(artist)
+                
+                # THE FIX: Filter the fallback search against play history
+                upcoming_list = [t for t in artist_tracks if t["id"] not in history]
+                
+                # If you've played ALL their top songs, just shuffle the list to break the loop
+                if not upcoming_list:
+                    upcoming_list = artist_tracks
+                    random.shuffle(upcoming_list)
 
-            if upcoming_list:
-                self.call_from_thread(self.update_upcoming_ui, video_id, upcoming_list)
-            elif err:
-                self.call_from_thread(self.show_error, f"REC API FAILED: {err}")
-            else:
-                self.call_from_thread(self.show_error, "REC FAILED: No related tracks found.")
+        if upcoming_list:
+            self.call_from_thread(self.update_upcoming_ui, video_id, upcoming_list)
+        elif err:
+            self.call_from_thread(self.show_error, f"REC API FAILED: {err}")
+        else:
+            self.call_from_thread(self.show_error, "REC FAILED: No related tracks found.")
 
 
     def update_upcoming_ui(self, source_video_id: str, upcoming_list: list) -> None:
