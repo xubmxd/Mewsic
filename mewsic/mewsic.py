@@ -338,6 +338,16 @@ class MewsicApp(App):
         self.core.on_track_ended_callback = self.handle_track_ended
         self.image_cache = {}
         self.stop_prefetch = threading.Event()
+        self.art_reset_timer = None
+
+    def reset_now_playing_art(self) -> None:
+        """Resets the displayed album art to the currently playing track."""
+        if self.core.current_track and self.core.current_track.get("thumbnail"):
+            url = self.core.current_track["thumbnail"]
+            if url in self.image_cache:
+                self.update_album_art(self.image_cache[url])
+            else:
+                self.fetch_and_display_art(url)
 
     def action_toggle_loop(self) -> None:
         is_looping = self.core.toggle_loop()
@@ -432,8 +442,12 @@ class MewsicApp(App):
                 pass
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if self.art_reset_timer:
+            self.art_reset_timer.stop()
+
         if event.item is None:
             return
+
         list_view = self.query_one("#results-list", TrackListView)
         try:
             index = list_view.children.index(event.item)
@@ -445,6 +459,8 @@ class MewsicApp(App):
                         self.update_album_art(self.image_cache[url])
                     else:
                         self.fetch_and_display_art(url)
+
+                    self.art_reset_timer = self.set_timer(5.0, self.reset_now_playing_art)
         except ValueError:
             pass
 
@@ -587,6 +603,10 @@ class MewsicApp(App):
             self.execute_play(selected_track)
 
     def execute_play(self, track: dict, is_back: bool = False) -> None:
+
+        if self.art_reset_timer:
+            self.art_reset_timer.stop()
+
         if track.get("thumbnail"):
             url = track["thumbnail"]
             if url in self.image_cache:
@@ -633,11 +653,9 @@ class MewsicApp(App):
             threading.Thread(
                 target=self._prefetch_worker, args=(self.search_results,), daemon=True
             ).start()
-            
-            # 4. Trigger the UI update for the ListView
+           
             self.update_results_ui()
             
-            # Optional: Update the status bar
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update("SYS_STATUS: RECOMMENDATIONS LOADED.")
 
