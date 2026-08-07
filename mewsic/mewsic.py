@@ -5,7 +5,12 @@ import locale
 import os
 import random
 import threading
-
+# --- ADD THESE LINES TO FIX WINDOWS DLL LOADING ---
+current_dir = os.path.dirname(os.path.abspath(__file__))
+os.environ["PATH"] = current_dir + os.pathsep + os.environ["PATH"]
+if hasattr(os, 'add_dll_directory'):
+    os.add_dll_directory(current_dir)
+# --------------------------------------------------
 import mpv
 import requests
 from bindings import LIST_BINDINGS, MEWSIC_BINDINGS
