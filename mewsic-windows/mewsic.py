@@ -143,10 +143,11 @@ class MewsicCore:
                         "id": vid,
                         "thumbnail": thumb_url,
                     })
-                    
+
             return recommendations, None
         except Exception as e:
             return [], str(e)
+
 
     def get_progress(self):
         try:
@@ -469,19 +470,19 @@ class MewsicApp(App):
     def load_startup_recommendations(self, last_video_id: str) -> None:
         try:
             self.call_from_thread(
-                self.query_one("#status-bar", Label).update, 
+                self.query_one("#status-bar", Label).update,
                 "SYS_STATUS: FETCHING STARTUP RECOMMENDATIONS..."
             )
-            
+
             # 1. Fetch recommendations using our stable core function
             upcoming_list, err = self.core.get_recommendation(last_video_id, self.core.play_history.copy())
-            
+
             # 2. The Fallback: If YT Music radio fails, grab the artist's discography
             if not upcoming_list:
                 artist = self.core.current_track.get("artist", "") if self.core.current_track else ""
                 if artist:
                     self.call_from_thread(
-                        self.query_one("#status-bar", Label).update, 
+                        self.query_one("#status-bar", Label).update,
                         "SYS_STATUS: RADIO FAILED. FETCHING ARTIST DISCOGRAPHY..."
                     )
                     upcoming_list = self.core.search_songs(artist)
@@ -492,7 +493,7 @@ class MewsicApp(App):
                 self.call_from_thread(self.update_upcoming_ui, last_video_id, upcoming_list)
             else:
                 self.call_from_thread(self.show_error, f"REC_ERR: {err or 'No tracks found'}")
-                
+
         except Exception as e:
             self.call_from_thread(self.show_error, f"REC_ERR: {str(e)}")
 
@@ -612,42 +613,49 @@ class MewsicApp(App):
         status_bar.update("SYS_STATUS: PLAYBACK INITIATED")
         self.fetch_recommendation(track["id"], self.core.play_history.copy())
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def fetch_recommendation(self, video_id: str, history: set) -> None:
-        upcoming_list, err = self.core.get_recommendation(video_id, history)
-        
-        if err:
-            self.call_from_thread(self.show_error, f"REC API FAILED: {err}")
-        elif upcoming_list:
-            self.call_from_thread(self.update_upcoming_ui, video_id, upcoming_list)
-        else:
-            self.call_from_thread(self.show_error, "REC FAILED: No related tracks found.")
+            upcoming_list, err = self.core.get_recommendation(video_id, history)
+
+            # Fallback: If radio returned nothing, search the current artist's discography
+            if not upcoming_list:
+                artist = self.core.current_track.get("artist", "") if self.core.current_track else ""
+                if artist:
+                    upcoming_list = self.core.search_songs(artist)
+
+            if upcoming_list:
+                self.call_from_thread(self.update_upcoming_ui, video_id, upcoming_list)
+            elif err:
+                self.call_from_thread(self.show_error, f"REC API FAILED: {err}")
+            else:
+                self.call_from_thread(self.show_error, "REC FAILED: No related tracks found.")
+
 
     def update_upcoming_ui(self, source_video_id: str, upcoming_list: list) -> None:
         if self.core.current_track and self.core.current_track["id"] == source_video_id:
             if not upcoming_list:
                 return
-            
+
             self.core.upcoming_track = upcoming_list[0]
             dashboard = self.query_one("#now-playing-text", Label)
             dashboard.update(
                 f"[ AUDIO STREAM ACTIVE ]\n\n{self.core.current_track['title']}\nby {self.core.current_track['artist']}\n\n[ UP NEXT ]\n{self.core.upcoming_track['title']}"
             )
-            
+
             self.search_results = upcoming_list
-            
+
             self.stop_prefetch.set()
             self.image_cache.clear()
             import gc
             gc.collect()
             self.stop_prefetch = threading.Event()
-            
+
             threading.Thread(
                 target=self._prefetch_worker, args=(self.search_results,), daemon=True
             ).start()
-           
+
             self.update_results_ui()
-            
+
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update("SYS_STATUS: RECOMMENDATIONS LOADED.")
 
