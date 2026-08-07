@@ -126,8 +126,7 @@ class MewsicCore:
 
     def get_recommendation(self, video_id: str, history: set):
         try:
-            radio_id = f"RDAMVM{video_id}"
-            res = self.ytmusic.get_watch_playlist(playlistId=radio_id, limit=30)
+            res = self.ytmusic.get_watch_playlist(videoId=video_id, limit=30)
             tracks = res.get("tracks", [])
 
             recommendations = []
@@ -137,20 +136,15 @@ class MewsicCore:
                     thumbnails = t.get("thumbnails") or t.get("thumbnail") or []
                     thumb_url = thumbnails[-1]["url"] if thumbnails else None
 
-                    recommendations.append(
-                        {
-                            "title": t.get("title", "Unknown"),
-                            "artist": ", ".join(
-                                [a["name"] for a in t.get("artists", [])]
-                            ),
-                            "id": t.get("videoId"),
-                            "thumbnail": thumb_url,
-                        }
-                    )
-            return recommendations  # Now returning a full list of dictionaries
+                    recommendations.append({
+                        "title": t.get("title", "Unknown"),
+                        "artist": ", ".join([a["name"] for a in t.get("artists", [])]),
+                        "id": vid,
+                        "thumbnail": thumb_url,
+                    })
+            return recommendations, None
         except Exception as e:
-            pass
-        return []
+            return [], str(e) 
 
     def get_progress(self):
         try:
@@ -632,9 +626,14 @@ class MewsicApp(App):
 
     @work(thread=True)
     def fetch_recommendation(self, video_id: str, history: set) -> None:
-        upcoming_list = self.core.get_recommendation(video_id, history)
-        if upcoming_list:
+        upcoming_list, err = self.core.get_recommendation(video_id, history)
+        
+        if err:
+            self.call_from_thread(self.show_error, f"REC API FAILED: {err}")
+        elif upcoming_list:
             self.call_from_thread(self.update_upcoming_ui, video_id, upcoming_list)
+        else:
+            self.call_from_thread(self.show_error, "REC FAILED: No related tracks found.")
 
     def update_upcoming_ui(self, source_video_id: str, upcoming_list: list) -> None:
         if self.core.current_track and self.core.current_track["id"] == source_video_id:
