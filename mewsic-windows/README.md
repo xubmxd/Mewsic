@@ -18,6 +18,10 @@ Search for tracks, queue up your favorite artists, and let the endless radio fea
 * mpv media player installed on your system.
 * yt-dlp (for extracting audio streams).
 
+### One line installation
+```powershell
+irm https://raw.githubusercontent.com/xubmxd/Mewsic/main/install.ps1 | iex
+```
 ### 1. Clone the Repository
 ```bash
 git clone https://github.com/yourusername/Mewsic.git
