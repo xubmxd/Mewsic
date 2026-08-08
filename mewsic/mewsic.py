@@ -227,112 +227,216 @@ class InteractiveBar(Static):
 
 class MewsicApp(App):
     TITLE = "Mewsic"
-
     CSS = f"""
+
     Screen {{
-        background: {theme['bg']};
+
+        background: transparent;
+
         color: {theme['fg']};
+
     }}
+
     Header {{
+
         background: {theme['bg']};
+
         color: {theme['border']};
+
         text-style: bold;
+
     }}
+
     Footer {{
+
         background: {theme['bg']};
+
         color: {theme['border']};
+
     }}
+
     #main-container {{
+
         height: 1fr;
+
     }}
+
     #left-pane {{
+
         width: 60%;
+
         height: 100%;
+
         margin: 1;
+
     }}
+
     #right-pane {{
+
         width: 40%;
+
         height: 100%;
+
         margin: 1;
+
         border: solid {theme['border']};
+
         background: {theme['bg']};
+
         padding: 0 1;
+
     }}
+
     #volume-label {{
+
         width: 100%;
+
         text-align: right;
+
         color: {theme['accent']};
+
         text-style: bold;
+
         padding-right: 2;
+
     }}
+
     Input {{
+
         border: solid {theme['border']};
+
         background: {theme['bg']};
+
         color: {theme['fg']};
+
     }}
+
     Input:focus {{
+
         border: double {theme['accent']};
+
     }}
+
     ListView {{
+
         border: solid {theme['border']};
+
         background: {theme['bg']};
+
         color: {theme['fg']};
+
         height: 1fr;
+
         margin-top: 1;
+
     }}
+
     ListItem {{
+
         color: {theme['fg']};
+
         padding: 0 1;
+
     }}
+
     ListItem.--highlight {{
+
         background: {theme['border']};
+
         color: {theme['bg']};
+
         text-style: bold;
+
     }}
+
     #status-bar {{
+
         dock: bottom;
+
         height: 3;
+
         border-top: solid {theme['border']};
+
         background: {theme['bg']};
+
         color: {theme['border']};
+
         content-align: center middle;
+
     }}
+
     #art-container {{
+
         height: 1fr;
+
         width: 100%;
+
         align: center middle;
+
     }}
+
     #album-art {{
+
         width: 20;
+
         height: 10;
+
     }}
+
     #info-container {{
+
         dock: bottom;
+
         height: 10;
+
         width: 100%;
+
         padding-top: 0;
+
         margin-top:1;
+
         border-top: dashed {theme['border']};
+
     }}
+
     #progress-container {{
+
         height: 1;
+
         width: 100%;
+
         margin-top: 1;
+
         layout: horizontal;
+
     }}
+
     #time-current {{
+
         width: 6;
+
         color: {theme['accent']};
+
     }}
+
     #time-total {{
+
         width: 6;
+
         text-align: right;
+
         color: {theme['accent']};
+
     }}
+
     #progress-bar {{
+
         width: 1fr;
+
     }}
+
     """
+
 
     BINDINGS = MEWSIC_BINDINGS
 
@@ -700,6 +804,30 @@ class MewsicApp(App):
             status_bar.update(
                 "SYS_STATUS: STILL CALCULATING NEXT TRACK... PLEASE WAIT."
             )
+
+    def action_set_next_track(self) -> None:
+        list_view = self.query_one("#results-list", TrackListView)
+        index = list_view.index
+        
+        if index is not None and index < len(self.search_results):
+            selected_track = self.search_results[index]
+            
+            self.core.upcoming_track = selected_track
+            
+            if self.core.current_track:
+                dashboard = self.query_one("#now-playing-text", Label)
+                state_text = (
+                    "[ STREAM PAUSED ]"
+                    if self.core.player.pause
+                    else "[ AUDIO STREAM ACTIVE ]"
+                )
+                
+                dashboard.update(
+                    f"{state_text}\n\n{self.core.current_track['title']}\nby {self.core.current_track['artist']}\n\n[ UP NEXT ]\n{self.core.upcoming_track['title']}"
+                )
+                
+            status_bar = self.query_one("#status-bar", Label)
+            status_bar.update(f"SYS_STATUS: OVERRIDE - QUEUED '{selected_track['title']}' NEXT.")
 
     def action_play_previous(self) -> None:
         if self.core.previous_tracks:
