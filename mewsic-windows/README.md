@@ -20,7 +20,7 @@ Search for tracks, queue up your favorite artists, and let the endless radio fea
 
 ### One line installation
 ```powershell
-irm https://raw.githubusercontent.com/xubmxd/Mewsic/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/xubmxd/Mewsic/main/mewsic-windows/install.ps1 | iex
 ```
 ### 1. Clone the Repository
 ```bash
