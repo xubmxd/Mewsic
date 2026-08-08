@@ -1,0 +1,20 @@
+Screen { background: $bg; color: $fg; }
+Header { background: $bg; color: $border; text-style: bold; }
+Footer { background: $bg; color: $border; }
+#main-container { height: 1fr; }
+#left-pane { width: 60%; height: 100%; margin: 1; }
+#right-pane { width: 40%; height: 100%; margin: 1; border: solid $border; background: $bg; padding: 0 1; }
+#volume-label { width: 100%; text-align: right; color: $accent; text-style: bold; padding-right: 2; }
+Input { border: solid $border; background: $bg; color: $fg; }
+Input:focus { border: double $accent; }
+ListView { border: solid $border; background: $bg; color: $fg; height: 1fr; margin-top: 1; }
+ListItem { color: $fg; padding: 0 1; }
+ListItem.--highlight { background: $border; color: $bg; text-style: bold; }
+#status-bar { dock: bottom; height: 3; border-top: solid $border; background: $bg; color: $border; content-align: center middle; }
+#art-container { height: 1fr; width: 100%; align: center middle; }
+#album-art { width: 20; height: 10; }
+#info-container { dock: bottom; height: 10; width: 100%; padding-top: 0; margin-top:1; border-top: dashed $border; }
+#progress-container { height: 1; width: 100%; margin-top: 1; layout: horizontal; }
+#time-current { width: 6; color: $accent; }
+#time-total { width: 6; text-align: right; color: $accent; }
+#progress-bar { width: 1fr; }

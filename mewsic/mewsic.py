@@ -5,15 +5,9 @@ import locale
 import os
 import random
 import threading
-# --- ADD THESE LINES TO FIX WINDOWS DLL LOADING ---
-current_dir = os.path.dirname(os.path.abspath(__file__))
-os.environ["PATH"] = current_dir + os.pathsep + os.environ["PATH"]
-if hasattr(os, 'add_dll_directory'):
-    os.add_dll_directory(current_dir)
-# --------------------------------------------------
 import mpv
 import requests
-from bindings import LIST_BINDINGS, MEWSIC_BINDINGS
+from config import LIST_BINDINGS, MEWSIC_BINDINGS, THEME, APP_TITLE, DEFAULT_REC_LIMIT, STATE_FILE
 from PIL import Image, ImageOps
 from textual import work
 from textual.app import App, ComposeResult
@@ -23,30 +17,6 @@ from textual.widgets import (Footer, Header, Input, Label, ListItem, ListView,
                              Static)
 from textual_image.widget import Image as KittyImage
 from ytmusicapi import YTMusic
-
-
-def load_pywal_colors():
-    colors = {
-        "bg": "#170911",
-        "fg": "#c5c1c3",
-        "border": "#E53D42",
-        "accent": "#F14F51",
-    }
-    wal_file = os.path.expanduser("~/.cache/wal/colors.json")
-    try:
-        if os.path.exists(wal_file):
-            with open(wal_file, "r") as f:
-                wal_data = json.load(f)
-            colors["bg"] = wal_data["special"]["background"]
-            colors["fg"] = wal_data["special"]["foreground"]
-            colors["border"] = wal_data["colors"]["color2"]
-            colors["accent"] = wal_data["colors"]["color6"]
-    except Exception:
-        pass
-    return colors
-
-
-theme = load_pywal_colors()
 
 
 class MewsicCore:
@@ -72,9 +42,10 @@ class MewsicCore:
         self.previous_tracks = []
         self.looping = False
 
-        self.state_file = os.path.expanduser("~/.cache/mewsic_state.json")
+        self.state_file = STATE_FILE
         self.state = self.load_state()
         self.player.volume = self.state.get("volume", 100)
+        self.rec_limit = self.state.get("rec_limit", DEFAULT_REC_LIMIT)
 
         @self.player.property_observer("idle-active")
         def on_idle(name, value):
@@ -88,13 +59,14 @@ class MewsicCore:
                     return json.load(f)
         except Exception:
             pass
-        return {"volume": 100, "last_track": None}
+        return {"volume": 100, "last_track": None, "rec_limit": DEFAULT_REC_LIMIT}
 
     def save_state(self):
         try:
             state = {
                 "volume": self.player.volume if self.player.volume is not None else 100,
                 "last_track": self.current_track,
+                "rec_limit": self.rec_limit,
             }
             with open(self.state_file, "w") as f:
                 json.dump(state, f)
@@ -127,7 +99,7 @@ class MewsicCore:
     def get_recommendation(self, video_id: str, history: set):
         try:
             radio_id = f"RDAMVM{video_id}"
-            res = self.ytmusic.get_watch_playlist(playlistId=radio_id, limit=30)
+            res = self.ytmusic.get_watch_playlist(playlistId=radio_id, limit=self.rec_limit)
             tracks = res.get("tracks", [])
 
             recommendations = []
@@ -147,7 +119,7 @@ class MewsicCore:
                             "thumbnail": thumb_url,
                         }
                     )
-            return recommendations  # Now returning a full list of dictionaries
+            return recommendations[:self.rec_limit]
         except Exception as e:
             pass
         return []
@@ -226,217 +198,13 @@ class InteractiveBar(Static):
 
 
 class MewsicApp(App):
-    TITLE = "Mewsic"
-    CSS = f"""
-
-    Screen {{
-
-        background: transparent;
-
-        color: {theme['fg']};
-
-    }}
-
-    Header {{
-
-        background: {theme['bg']};
-
-        color: {theme['border']};
-
-        text-style: bold;
-
-    }}
-
-    Footer {{
-
-        background: {theme['bg']};
-
-        color: {theme['border']};
-
-    }}
-
-    #main-container {{
-
-        height: 1fr;
-
-    }}
-
-    #left-pane {{
-
-        width: 60%;
-
-        height: 100%;
-
-        margin: 1;
-
-    }}
-
-    #right-pane {{
-
-        width: 40%;
-
-        height: 100%;
-
-        margin: 1;
-
-        border: solid {theme['border']};
-
-        background: {theme['bg']};
-
-        padding: 0 1;
-
-    }}
-
-    #volume-label {{
-
-        width: 100%;
-
-        text-align: right;
-
-        color: {theme['accent']};
-
-        text-style: bold;
-
-        padding-right: 2;
-
-    }}
-
-    Input {{
-
-        border: solid {theme['border']};
-
-        background: {theme['bg']};
-
-        color: {theme['fg']};
-
-    }}
-
-    Input:focus {{
-
-        border: double {theme['accent']};
-
-    }}
-
-    ListView {{
-
-        border: solid {theme['border']};
-
-        background: {theme['bg']};
-
-        color: {theme['fg']};
-
-        height: 1fr;
-
-        margin-top: 1;
-
-    }}
-
-    ListItem {{
-
-        color: {theme['fg']};
-
-        padding: 0 1;
-
-    }}
-
-    ListItem.--highlight {{
-
-        background: {theme['border']};
-
-        color: {theme['bg']};
-
-        text-style: bold;
-
-    }}
-
-    #status-bar {{
-
-        dock: bottom;
-
-        height: 3;
-
-        border-top: solid {theme['border']};
-
-        background: {theme['bg']};
-
-        color: {theme['border']};
-
-        content-align: center middle;
-
-    }}
-
-    #art-container {{
-
-        height: 1fr;
-
-        width: 100%;
-
-        align: center middle;
-
-    }}
-
-    #album-art {{
-
-        width: 20;
-
-        height: 10;
-
-    }}
-
-    #info-container {{
-
-        dock: bottom;
-
-        height: 10;
-
-        width: 100%;
-
-        padding-top: 0;
-
-        margin-top:1;
-
-        border-top: dashed {theme['border']};
-
-    }}
-
-    #progress-container {{
-
-        height: 1;
-
-        width: 100%;
-
-        margin-top: 1;
-
-        layout: horizontal;
-
-    }}
-
-    #time-current {{
-
-        width: 6;
-
-        color: {theme['accent']};
-
-    }}
-
-    #time-total {{
-
-        width: 6;
-
-        text-align: right;
-
-        color: {theme['accent']};
-
-    }}
-
-    #progress-bar {{
-
-        width: 1fr;
-
-    }}
-
-    """
-
+    TITLE = APP_TITLE
+
+    with open(os.path.join(current_dir, "theme.tcss"), "r") as f:
+        CSS = f.read().replace("$bg", THEME['bg']) \
+                      .replace("$fg", THEME['fg']) \
+                      .replace("$border", THEME['border']) \
+                      .replace("$accent", THEME['accent'])
 
     BINDINGS = MEWSIC_BINDINGS
 
@@ -515,10 +283,10 @@ class MewsicApp(App):
         yield Header(show_clock=True, icon="󰄛")
         with Horizontal(id="main-container"):
             with Vertical(id="left-pane"):
-                yield Input(placeholder="> AWAITING QUERY...", id="search-box")
+                yield Input(placeholder="> AWAITING QUERY OR COMMAND...", id="search-box")
                 yield TrackListView(id="results-list")
             with Vertical(id="right-pane"):
-                yield Label("VOL: 100%", id="volume-label")
+                yield Label(f"VOL: {self.core.player.volume}%", id="volume-label")
                 with Vertical(id="art-container"):
                     yield KittyImage(id="album-art")
                 with Vertical(id="info-container"):
@@ -580,10 +348,8 @@ class MewsicApp(App):
                 self.query_one("#status-bar", Label).update,
                 "SYS_STATUS: FETCHING STARTUP RECOMMENDATIONS...",
             )
-
-            # Fetch a radio playlist based on the last track
             radio_id = f"RDAMVM{last_video_id}"
-            res = self.core.ytmusic.get_watch_playlist(playlistId=radio_id, limit=12)
+            res = self.core.ytmusic.get_watch_playlist(playlistId=radio_id, limit=self.core.rec_limit)
             tracks = res.get("tracks", [])
 
             parsed_results = []
@@ -603,9 +369,8 @@ class MewsicApp(App):
                         }
                     )
 
-            self.search_results = parsed_results
+            self.search_results = parsed_results[:self.core.rec_limit]
 
-            # Utilize the existing prefetch worker for album art
             self.stop_prefetch.set()
             self.image_cache.clear()
             self.stop_prefetch = threading.Event()
@@ -663,6 +428,21 @@ class MewsicApp(App):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         query = event.value.strip()
+
+        # Handle slash commands like :limit 25
+        if query.startswith(":limit "):
+            try:
+                new_limit = int(query.split(" ")[1])
+                self.core.rec_limit = new_limit
+                self.core.save_state()
+                
+                status_bar = self.query_one("#status-bar", Label)
+                status_bar.update(f"SYS_STATUS: RECOMMENDATION LIMIT SET TO {new_limit}")
+                self.query_one("#search-box", Input).value = ""
+            except ValueError:
+                self.show_error("INVALID LIMIT VALUE. USE FORMAT: :limit 25")
+            return
+
         if query:
             status_bar = self.query_one("#status-bar", Label)
             status_bar.update(f"SYS_STATUS: FETCHING DATA FOR '{query.upper()}'...")
