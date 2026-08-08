@@ -200,12 +200,14 @@ class InteractiveBar(Static):
 class MewsicApp(App):
     TITLE = APP_TITLE
 
-    with open(os.path.join(current_dir, "theme.tcss"), "r") as f:
+    _base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    with open(os.path.join(_base_dir, "theme.tcss"), "r") as f:
         CSS = f.read().replace("$bg", THEME['bg']) \
                       .replace("$fg", THEME['fg']) \
                       .replace("$border", THEME['border']) \
                       .replace("$accent", THEME['accent'])
-
+    
     BINDINGS = MEWSIC_BINDINGS
 
     def __init__(self):
